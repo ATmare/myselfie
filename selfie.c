@@ -1941,6 +1941,7 @@ void turn_on_gc_library(uint64_t period, char* name);
 // ------------------------ GLOBAL CONSTANTS -----------------------
 
 char* selfie_name = (char*) 0; // name of running selfie executable
+char* owner_name = (char*) 0; 
 
 uint64_t BOOTLEVELZERO = 0; // flag for indicating boot level
 
@@ -5221,6 +5222,8 @@ void selfie_compile() {
   uint64_t number_of_source_files;
   uint64_t fetch_dss_code_location;
 
+  owner_name = "Marie-Theres Schweitl";
+
   fetch_dss_code_location = 0;
 
   // link until next console option
@@ -5282,6 +5285,8 @@ void selfie_compile() {
       source_name = get_argument();
 
       number_of_source_files = number_of_source_files + 1;
+
+      printf2("%s: This is %s's Selfie!\n", selfie_name, owner_name);
 
       printf2("%s: selfie compiling %s with starc\n", selfie_name, source_name);
 
