@@ -227,6 +227,11 @@ uint64_t CHAR_LT           = '<';
 uint64_t CHAR_GT           = '>';
 uint64_t CHAR_BACKSLASH    =  92; // ASCII code 92 = backslash
 
+// RISC U characters (Mares)
+uint64_t CHAR_TILDE        = '~';
+uint64_t CHAR_COLON        = ':';
+uint64_t CHAR_DOT          = '.';
+
 uint64_t* character_buffer; // buffer for reading and writing characters
 
 char* integer_buffer; // buffer for formatting integers
@@ -343,16 +348,27 @@ uint64_t is_character_new_line();
 uint64_t is_character_whitespace();
 
 uint64_t find_next_character();
+uint64_t find_next_riscu_character(); // (Mares)
 
 uint64_t is_character_letter();
 uint64_t is_character_digit();
+uint64_t is_character_hexa_or_digit(); // (Mares)
 uint64_t is_character_letter_or_digit_or_underscore();
 uint64_t is_character_not_double_quote_or_new_line_or_eof();
 
 uint64_t identifier_string_match(uint64_t string_index);
+uint64_t identifier_register_match(uint64_t string_index);
 uint64_t identifier_or_keyword();
+uint64_t riscu_instruction_or_quad();  // (Mares)
+uint64_t register_name(); // (Mares)
+
+uint64_t is_riscu_arithmetic_or_comparison(); // (Mares)
+uint64_t is_riscu_memory_or_jalr(); // (Mares)
+uint64_t is_riscu_lui_or_jal(); // (Mares)
+uint64_t is_riscu_addi_or_beq(); // (Mares)
 
 void get_symbol();
+void get_riscu_symbol(); // (Mares)
 
 void handle_escape_sequence();
 
@@ -397,10 +413,37 @@ uint64_t SYM_INT      = 28; // int
 uint64_t SYM_CHAR     = 29; // char
 uint64_t SYM_UNSIGNED = 30; // unsigned
 
+// symbols for RISC U instructions (Mares)
+
+uint64_t SYM_LUI   = 31;  // lui
+uint64_t SYM_ADDI  = 32;  // addi
+uint64_t SYM_ADD   = 33;  // add
+uint64_t SYM_SUB   = 34;  // sub
+uint64_t SYM_MUL   = 35;  // mul
+uint64_t SYM_DIVU  = 36;  // divu
+uint64_t SYM_REMU  = 37;  // remu
+uint64_t SYM_SLTU  = 38;  // sltu
+uint64_t SYM_LD    = 39;  // ld
+uint64_t SYM_SD    = 40;  // sd
+uint64_t SYM_BEQ   = 41;  // beq
+uint64_t SYM_JAL   = 42;  // jal
+uint64_t SYM_JALR  = 43;  // jalr
+uint64_t SYM_ECALL = 44;  // ecall
+
+// symbols for parsing RISC U instructions (Mares)
+
+uint64_t SYM_TILDE      = 45;  // ~
+uint64_t SYM_DOT        = 46;  // .
+uint64_t SYM_COLON      = 47;  // :
+uint64_t SYM_QUAD       = 48;  // quad
+uint64_t SYM_NOP        = 49;  // nop
+uint64_t SYM_REGISTER   = 50;  // register
+
 uint64_t* SYMBOLS; // strings representing symbols
 
 uint64_t MAX_IDENTIFIER_LENGTH = 64;  // maximum number of characters in an identifier
 uint64_t MAX_INTEGER_LENGTH    = 20;  // maximum number of characters in an unsigned integer
+uint64_t MAX_HEXA_LENGTH       = 18;  // maximum number of characters in an unsigned integer in hexadecimal notation (Mares)
 uint64_t MAX_STRING_LENGTH     = 128; // maximum number of characters in a string
 
 // ------------------------ GLOBAL VARIABLES -----------------------
@@ -411,7 +454,9 @@ char* identifier = (char*) 0; // stores scanned identifier as string
 char* integer    = (char*) 0; // stores scanned integer as string
 char* string     = (char*) 0; // stores scanned string
 
+
 uint64_t literal = 0; // numerical value of most recently scanned integer or character
+uint64_t registernumber = 0; // stores the numerical value of scanned register (Mares)
 
 uint64_t integer_is_signed = 0; // enforce INT64_MIN limit if '-' was scanned before
 
@@ -431,7 +476,7 @@ uint64_t source_fd   = 0; // file descriptor of open source file
 // ------------------------- INITIALIZATION ------------------------
 
 void init_scanner () {
-  SYMBOLS = smalloc((SYM_UNSIGNED + 1) * SIZEOFUINT64STAR);
+  SYMBOLS = smalloc((SYM_REGISTER + 1) * SIZEOFUINT64STAR);
 
   *(SYMBOLS + SYM_INTEGER)      = (uint64_t) "integer";
   *(SYMBOLS + SYM_CHARACTER)    = (uint64_t) "character";
@@ -465,6 +510,29 @@ void init_scanner () {
   *(SYMBOLS + SYM_INT)      = (uint64_t) "int";
   *(SYMBOLS + SYM_CHAR)     = (uint64_t) "char";
   *(SYMBOLS + SYM_UNSIGNED) = (uint64_t) "unsigned";
+
+  // RISC-U symbols
+  *(SYMBOLS + SYM_LUI)          = (uint64_t) "lui";
+  *(SYMBOLS + SYM_ADDI)         = (uint64_t) "addi";
+  *(SYMBOLS + SYM_ADD)          = (uint64_t) "add";
+  *(SYMBOLS + SYM_SUB)          = (uint64_t) "sub";
+  *(SYMBOLS + SYM_MUL)          = (uint64_t) "mul";
+  *(SYMBOLS + SYM_DIVU)         = (uint64_t) "divu";
+  *(SYMBOLS + SYM_REMU)         = (uint64_t) "remu";
+  *(SYMBOLS + SYM_SLTU)         = (uint64_t) "sltu";
+  *(SYMBOLS + SYM_LD)           = (uint64_t) "ld";
+  *(SYMBOLS + SYM_SD)           = (uint64_t) "sd";
+  *(SYMBOLS + SYM_BEQ)          = (uint64_t) "beq";
+  *(SYMBOLS + SYM_JAL)          = (uint64_t) "jal";
+  *(SYMBOLS + SYM_JALR)         = (uint64_t) "jalr";
+  *(SYMBOLS + SYM_ECALL)        = (uint64_t) "ecall";
+
+  *(SYMBOLS + SYM_TILDE)        = (uint64_t) "~";
+  *(SYMBOLS + SYM_DOT)          = (uint64_t) ".";
+  *(SYMBOLS + SYM_COLON)        = (uint64_t) ":";
+  *(SYMBOLS + SYM_QUAD)         = (uint64_t) "quad";
+  *(SYMBOLS + SYM_NOP)          = (uint64_t) "nop";
+  *(SYMBOLS + SYM_REGISTER)     = (uint64_t) "register";
 
   character = CHAR_EOF;
   symbol    = SYM_EOF;
@@ -611,6 +679,7 @@ void restore_temporaries(uint64_t number_of_temporaries);
 
 void syntax_error_symbol(uint64_t expected);
 void syntax_error_unexpected();
+void syntax_error_unexpected_and_exit(); // (Mares)
 void print_type(uint64_t type);
 void type_warning(uint64_t expected, uint64_t found);
 
@@ -1349,6 +1418,21 @@ void print_data(uint64_t data);
 void print_instruction();
 
 void selfie_disassemble(uint64_t verbose);
+
+
+// -----------------------------------------------------------------
+// ------------------------- MARES ASSEMBLER -----------------------
+// -----------------------------------------------------------------
+
+void selfie_assemble();
+void debug_assembly();
+void compile_assembly();
+void compile_riscu_arithmetic_or_comparison();
+void compile_riscu_memory_or_jalr();
+void compile_riscu_lui_or_jal();
+void compile_riscu_addi_or_beq();
+void compile_riscu_quad();
+void compile_riscu_lineinfo();
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
@@ -2227,6 +2311,9 @@ uint64_t atoi(char* s) {
   uint64_t i;
   uint64_t n;
   uint64_t c;
+  uint64_t base;
+
+  base = 10;
 
   // the conversion of the ASCII string in s to its
   // numerical value n begins with the leftmost digit in s
@@ -2239,26 +2326,41 @@ uint64_t atoi(char* s) {
   // bit shifting since memory access can only be done in double words
   c = load_character(s, i);
 
+  if (load_character(s, 0) == '0') {
+    if (load_character(s, 1) == 'x') {
+      base = 16;
+      i = 2;
+      c = load_character(s, i);
+    }
+  }
+
   // loop until s is terminated
   while (c != 0) {
     // the numerical value of ASCII-encoded decimal digits
     // is offset by the ASCII code of '0' (which is 48)
     c = c - '0';
 
-    if (c > 9) {
-      printf2("%s: cannot convert non-decimal number %s\n", selfie_name, s);
+    // set numerical value c = c-7 for the hexadecimal numbers A-F
+    if (base == 16) {
+      if (c >= 17)
+        if (c <= 22)
+          c = c - 7;
+    }
 
-      exit(EXITCODE_SCANNERERROR);
+    if (c > (base - 1)) {
+      printf2("%s: cannot convert non-decimal or non-hexadecimal number %s\n", selfie_name, s);
+
+      exit(EXITCODE_BADARGUMENTS);
     }
 
     // assert: s contains a decimal number
 
     // use base 10 but detect wrap around
-    if (n < UINT64_MAX / 10)
-      n = n * 10 + c;
-    else if (n == UINT64_MAX / 10)
-      if (c <= UINT64_MAX % 10)
-        n = n * 10 + c;
+    if (n < UINT64_MAX / base)
+      n = n * base + c;
+    else if (n == UINT64_MAX / base)
+      if (c <= UINT64_MAX % base)
+        n = n * base + c;
       else {
         // s contains a decimal number larger than UINT64_MAX
         printf2("%s: cannot convert out-of-bound number %s\n", selfie_name, s);
@@ -2978,6 +3080,24 @@ uint64_t find_next_character() {
   }
 }
 
+// (Mares)
+uint64_t find_next_riscu_character() {
+  // read and discard all whitespace and comments until a character is found
+  // that is not whitespace or the file ends
+  while (1) {
+    if (is_character_whitespace()) {
+
+      // also count line feed and carriage return as ignored characters
+      number_of_ignored_characters = number_of_ignored_characters + 1;
+
+      get_character();
+
+    } else
+      // character found that is not whitespace and not occurring in a comment
+      return character;
+  }
+}
+
 uint64_t is_character_letter() {
   // ASCII codes for lower- and uppercase letters are in contiguous intervals
   if (character >= 'a')
@@ -3016,6 +3136,76 @@ uint64_t is_character_letter_or_digit_or_underscore() {
     return 0;
 }
 
+// (Mares)
+uint64_t is_character_hexa_or_digit() {
+  // ASCII codes for hexadecimal digits are in two contiguous intervals (48-57) (65-70)
+  if (character >= 'A') 
+    if (character <= 'F')
+      return 1;
+    else
+      return 0;
+  else if (is_character_digit())
+    return 1;
+  else
+    return 0;
+}
+
+// (Mares)
+uint64_t is_character_letter_or_digit() {
+  if (is_character_letter())
+    return 1;
+  else if (is_character_digit())
+    return 1;
+  else
+    return 0;
+}
+
+// (Mares)
+uint64_t is_riscu_arithmetic_or_comparison() {
+  if (symbol == SYM_ADD)
+    return 1;
+  else if (symbol == SYM_SUB)
+    return 1;
+  else if (symbol == SYM_MUL)
+    return 1;
+  else if (symbol == SYM_DIVU)
+    return 1;
+  else if (symbol == SYM_REMU)
+    return 1;
+  else if (symbol == SYM_SLTU)
+    return 1;
+  return 0;
+}
+
+// (Mares)
+uint64_t is_riscu_addi_or_beq() {
+  if (symbol == SYM_BEQ)
+    return 1;
+  else if (symbol == SYM_ADDI)
+    return 1;
+  return 0;
+}
+
+// (Mares)
+uint64_t is_riscu_memory_or_jalr() {
+  if (symbol == SYM_LD)
+    return 1;
+  else if (symbol == SYM_SD)
+    return 1;
+  else if (symbol == SYM_JALR)
+    return 1;
+  return 0;
+}
+
+// (Mares)
+uint64_t is_riscu_lui_or_jal() {
+  if (symbol == SYM_LUI)
+    return 1;
+  else if (symbol == SYM_JAL)
+    return 1;
+  return 0;
+}
+
 uint64_t is_character_not_double_quote_or_new_line_or_eof() {
   if (character == CHAR_DOUBLEQUOTE)
     return 0;
@@ -3029,6 +3219,10 @@ uint64_t is_character_not_double_quote_or_new_line_or_eof() {
 
 uint64_t identifier_string_match(uint64_t keyword) {
   return string_compare(identifier, (char*) *(SYMBOLS + keyword));
+}
+
+uint64_t identifier_register_match(uint64_t keyword) {
+  return string_compare(identifier, (char*) *(REGISTERS + keyword));
 }
 
 uint64_t identifier_or_keyword() {
@@ -3056,6 +3250,59 @@ uint64_t identifier_or_keyword() {
   else
     return SYM_IDENTIFIER;
 }
+
+// (Mares)
+uint64_t riscu_instruction_or_quad() {
+  if (identifier_string_match(SYM_LUI))
+    return SYM_LUI;
+  else if (identifier_string_match(SYM_ADDI))
+    return SYM_ADDI;
+  else if (identifier_string_match(SYM_ADD))
+    return SYM_ADD;
+  else if (identifier_string_match(SYM_SUB))
+    return SYM_SUB;
+  else if (identifier_string_match(SYM_MUL))
+    return SYM_MUL;
+  else if (identifier_string_match(SYM_DIVU))
+    return SYM_DIVU;
+  else if (identifier_string_match(SYM_REMU))
+    return SYM_REMU;
+  else if (identifier_string_match(SYM_SLTU))
+    return SYM_SLTU;
+  else if (identifier_string_match(SYM_LD))
+    return SYM_LD;
+  else if (identifier_string_match(SYM_SD))
+    return SYM_SD;
+  else if (identifier_string_match(SYM_BEQ))
+    return SYM_BEQ;
+  else if (identifier_string_match(SYM_JAL))
+    return SYM_JAL;
+  else if (identifier_string_match(SYM_JALR))
+    return SYM_JALR;
+  else if (identifier_string_match(SYM_ECALL))
+    return SYM_ECALL;
+  else if (identifier_string_match(SYM_QUAD))
+    return SYM_QUAD;
+  else if (identifier_string_match(SYM_NOP))
+    return SYM_NOP;
+  else
+    return 0;
+}
+
+// (Mares)
+uint64_t register_name() {
+
+  uint64_t i; 
+  i = 0;
+
+  while (i <= REG_T6) {
+    if (identifier_register_match(i))
+      return i;
+    i = i +1;
+  }
+  return 32;
+}
+
 
 void get_symbol() {
   uint64_t i;
@@ -3681,6 +3928,11 @@ void syntax_error_unexpected() {
   print("unexpected symbol ");
   print_symbol(symbol);
   print(" found\n");
+}
+
+void syntax_error_unexpected_and_exit() {
+  syntax_error_unexpected();
+  exit(EXITCODE_PARSERERROR);
 }
 
 void print_type(uint64_t type) {
@@ -8542,6 +8794,595 @@ void selfie_disassemble(uint64_t verbose) {
     assembly_name);
 }
 
+
+// -----------------------------------------------------------------
+// ------------------------- MARES ASSEMBLER -----------------------
+// -----------------------------------------------------------------
+
+void selfie_assemble() { 
+
+  source_name = get_argument();
+
+  // assert: assembly_name is mapped and not longer than MAX_FILENAME_LENGTH
+
+  source_fd = sign_extend(open(source_name, O_RDONLY, 0), SYSCALL_BITWIDTH);
+
+  if (signed_less_than(source_fd, 0)) {
+    printf2("%s: could not open input file %s\n", selfie_name, source_name);
+
+    exit(EXITCODE_IOERROR);
+  }
+
+  //Assignment 2 Preperation
+  binary = zmalloc(MAX_BINARY_LENGTH);
+
+
+  reset_scanner();
+  compile_assembly();
+  printf1("%u\n", (char*) line_number);
+}
+
+// for testing and debugging
+void debug_assembly() {
+  uint64_t i;
+  string = string_alloc(MAX_STRING_LENGTH);
+  i = 0;
+
+  while (character != CHAR_EOF) {
+
+    store_character(string, i, character);
+    i = i + 1;
+    get_character();
+  }
+
+  printf1("%s\n", string);
+}
+
+void compile_assembly() { 
+
+  get_riscu_symbol();
+
+  while (symbol != SYM_EOF) {
+
+    // instruction rd, rs1, rs2
+    if (is_riscu_arithmetic_or_comparison()) {
+        compile_riscu_arithmetic_or_comparison();
+
+    // instruction rd, [-]imm(rs1)
+    } else if (is_riscu_memory_or_jalr()) {
+        compile_riscu_memory_or_jalr();
+
+    // instruction rd, [-]imm
+    } else if (is_riscu_lui_or_jal()) {
+        compile_riscu_lui_or_jal();
+
+    // instruction rd,rs1,[-]imm
+    } else if (is_riscu_addi_or_beq()) {
+        compile_riscu_addi_or_beq();
+
+    } else if (symbol == SYM_ECALL) {
+        get_riscu_symbol();
+        line_number = line_number + 1;
+
+    } else if (symbol == SYM_DOT) {
+        compile_riscu_quad();
+
+    } else if (symbol == SYM_INTEGER) {
+        compile_riscu_lineinfo();
+
+    } else if (symbol == SYM_NOP) {
+        get_riscu_symbol();
+        line_number = line_number + 1;
+
+    } else {
+      syntax_error_unexpected_and_exit();
+    }
+
+  }
+
+}
+
+// instruction rd,rs1,rs2
+void compile_riscu_arithmetic_or_comparison() {
+  // Assignment 2 Preperation
+  // uint64_t instruction;
+  // uint64_t rd_;
+  // uint64_t rs1_;
+  // uint64_t rs2_;
+
+    // instruction
+    // instruction = symbol; //Assignment 2 Preperation
+    get_riscu_symbol();
+
+    // instruction rd
+    if (symbol == SYM_REGISTER) {
+      // rd_ = registernumber; //Assignment 2 Preperation
+      get_riscu_symbol();
+
+      // instruction rd, 
+      if (symbol == SYM_COMMA) {
+        get_riscu_symbol();
+
+        // instruction rd, rs1
+        if (symbol == SYM_REGISTER) {
+          // rs1_ = registernumber;  //Assignment 2 Preperation
+          get_riscu_symbol();
+
+          // instruction rd, rs1,
+          if (symbol == SYM_COMMA) {
+            get_riscu_symbol();
+
+            // instruction rd, rs1, rs2
+            if (symbol == SYM_REGISTER) {
+              // rs2_ = registernumber; //Assignment 2 Preperation
+              get_riscu_symbol();
+
+              line_number = line_number + 1;
+
+              // Assignment 2 Preperation
+              // if (instruction == SYM_ADD)
+              //   emit_add(rd_, rs1_, rs2_);
+              // else if (instruction == SYM_SUB)
+              //   emit_sub(rd_, rs1_, rs2_);
+              // else if (instruction == SYM_MUL)
+              //   emit_mul(rd_, rs1_, rs2_);
+              // else if (instruction == SYM_DIVU)
+              //   emit_divu(rd_, rs1_, rs2_);
+              // else if (instruction == SYM_REMU)
+              //   emit_remu(rd_, rs1_, rs2_);
+
+            } else
+            syntax_error_unexpected_and_exit();
+
+          } else
+          syntax_error_unexpected_and_exit();
+
+        } else
+        syntax_error_unexpected_and_exit();
+
+      } else
+      syntax_error_unexpected_and_exit();
+
+    } else
+    syntax_error_unexpected_and_exit();
+}
+
+// instruction rd, [-]imm(rs1)
+void compile_riscu_memory_or_jalr() {
+  // Assignment 2 Preperation
+  // uint64_t instruction;
+  // uint64_t rd_;
+  // uint64_t rs1_;
+  uint64_t immediate_value;
+
+    // instruction
+    // instruction = symbol; // Assignment 2 Preperation
+    get_riscu_symbol();
+
+    // instruction rd
+    if (symbol == SYM_REGISTER) {
+      // rd_ = registernumber; // Assignment 2 Preperation
+      get_riscu_symbol();
+
+      // instruction rd, 
+      if (symbol == SYM_COMMA) {
+        get_riscu_symbol();
+
+        // instruction rd, [-]
+        if(symbol == SYM_MINUS) {
+          integer_is_signed = 1;
+          get_riscu_symbol();
+        }
+
+        // instruction rd, [-]imm
+        if (symbol == SYM_INTEGER) {
+          if (integer_is_signed)
+            immediate_value = -literal;
+          else
+            immediate_value = literal;
+
+          integer_is_signed = 0;
+          literal = immediate_value; // TODO: Delete for Assignment 2, just to avoid make warnings in Assignment 1
+          get_riscu_symbol();
+
+          // instruction rd, [-]imm(
+          if (symbol == SYM_LPARENTHESIS) {
+            get_riscu_symbol();
+
+            // instruction rd, [-]imm(rs1
+            if (symbol == SYM_REGISTER) {
+              // rs1_ = registernumber; // Assignment 2 Preperation
+              get_riscu_symbol();
+
+              // instruction rd, [-]imm(rs1)
+              if (symbol == SYM_RPARENTHESIS) {
+                get_riscu_symbol();
+                line_number = line_number + 1;
+
+                // Assignment 2 Preperation
+                // if (instruction == SYM_LD)
+                //   emit_ld(rd_, rs1_, immediate_value);
+                // else if (instruction == SYM_SD)
+                //   emit_sd(rd_, immediate_value, rs1_); // not sure
+                // else if (instruction == SYM_JALR)
+                //   emit_jalr(rd_, rs1_, immediate_value);
+
+              } else
+              syntax_error_unexpected_and_exit();
+              
+            } else
+            syntax_error_unexpected_and_exit();
+
+          } else
+          syntax_error_unexpected_and_exit();
+
+        } else
+        syntax_error_unexpected_and_exit();
+
+      } else
+      syntax_error_unexpected_and_exit();
+
+    } else
+    syntax_error_unexpected_and_exit();
+}
+
+// instruction rd, [-]imm
+void compile_riscu_lui_or_jal() {
+  // Assignment 2 Preperation
+  // uint64_t instruction;
+  // uint64_t rd_;
+  uint64_t immediate_value;
+
+    // instruction
+    // instruction = symbol; //Assignment 2 Preperation
+    get_riscu_symbol();
+
+    // instruction rd
+    if (symbol == SYM_REGISTER) {
+      // rd_ = registernumber; // Assignment 2 Preperation
+      get_riscu_symbol();
+
+      // instruction rd, 
+      if (symbol == SYM_COMMA) {
+        get_riscu_symbol();
+
+        // instruction rd,[-]
+        if(symbol == SYM_MINUS) {
+          integer_is_signed = 1;
+          get_riscu_symbol();
+        }
+
+        // instruction rd,[-]imm
+        if (symbol == SYM_INTEGER) {
+          if (integer_is_signed)
+            immediate_value = -literal;
+          else
+            immediate_value = literal;
+
+          integer_is_signed = 0;
+          literal = immediate_value; // TODO: Delete for Assignment 2, just to avoid make warnings in Assignment 1
+          get_riscu_symbol();
+
+          line_number = line_number + 1;
+
+          //Assignment 2 Preperation
+          // if (instruction == SYM_JAL)
+          //   emit_jal(rd_, immediate_value); // not sure
+          // else if (instruction == SYM_LUI)
+          //   emit_lui(rd_, immediate_value);
+
+        } else
+        syntax_error_unexpected_and_exit();
+
+      } else
+      syntax_error_unexpected_and_exit();
+
+    } else
+    syntax_error_unexpected_and_exit();
+}
+
+// instruction rd,rs1,[-]imm
+void compile_riscu_addi_or_beq() {
+  //Assignment 2 Preperation
+  // uint64_t instruction;
+  // uint64_t rd_;
+  // uint64_t rs1_;
+  uint64_t immediate_value;
+
+    // instruction
+    // instruction = symbol; //Assignment 2 Preperation
+    get_riscu_symbol();
+
+    // instruction rd
+    if (symbol == SYM_REGISTER) {
+      // rd_ = registernumber; //Assignment 2 Preperation
+      get_riscu_symbol();
+
+      // instruction rd, 
+      if (symbol == SYM_COMMA) {
+        get_riscu_symbol();
+
+        // instruction rd, rs1
+        if (symbol == SYM_REGISTER) {
+          // rs1_ = registernumber; //Assignment 2 Preperation
+          get_riscu_symbol();
+
+          // instruction rd, rs1,
+          if (symbol == SYM_COMMA) {
+            get_riscu_symbol();
+
+            // instruction rd, rs1, [-]
+            if (symbol == SYM_MINUS) {
+              integer_is_signed = 1;
+              get_riscu_symbol();
+            }
+
+            if (symbol == SYM_INTEGER) {
+              if (integer_is_signed)
+                immediate_value = -literal;
+              else
+                immediate_value = literal;
+
+              integer_is_signed = 0;
+              literal = immediate_value; // TODO: Delete for Assignment 2, just to avoid make warnings in Assignment 1
+              get_riscu_symbol();
+
+              line_number = line_number + 1;
+
+              //Assignment 2 Preperation
+              // if (instruction == SYM_ADDI)
+              //   emit_addi(rd_, rs1_, immediate_value);
+              // else if (instruction == SYM_BEQ)
+              //   emit_beq(rd_, rs1_, immediate_value); // not sure
+
+            } else
+            syntax_error_unexpected_and_exit();
+
+          } else
+          syntax_error_unexpected_and_exit();
+
+        } else
+        syntax_error_unexpected_and_exit();
+
+      } else
+      syntax_error_unexpected_and_exit();
+
+    } else
+    syntax_error_unexpected_and_exit();
+}
+
+// .quad 0xint....
+void compile_riscu_quad() {
+  get_riscu_symbol();
+
+  if (symbol == SYM_QUAD) {
+
+    get_riscu_symbol();
+
+    if (symbol == SYM_INTEGER) {
+      get_riscu_symbol();
+      line_number = line_number +1;
+
+    } else
+    syntax_error_unexpected_and_exit();
+
+  } else 
+  syntax_error_unexpected_and_exit();
+}
+
+// 0xint(~int): 
+void compile_riscu_lineinfo() {
+  //Assignment 2 Preperation
+  // uint64_t line_reference;
+  // uint64_t immediate_value;
+
+  // immediate_value = literal; //Assignment 2 Preperation
+  get_riscu_symbol();
+
+    // 0xint(
+    if (symbol == SYM_LPARENTHESIS) {
+      get_riscu_symbol();
+
+      // 0xint(~
+      if (symbol == SYM_TILDE) {
+        get_riscu_symbol();
+
+        // 0xint(~int
+        if (symbol == SYM_INTEGER) {
+          // line_reference = literal;
+          get_riscu_symbol();
+
+          // 0xint(~int)
+          if (symbol == SYM_RPARENTHESIS) {
+            get_riscu_symbol();
+
+            // 0xint(~int):
+            if (symbol == SYM_COLON) {
+              get_riscu_symbol();
+
+            } else
+            syntax_error_unexpected_and_exit();
+
+          } else
+          syntax_error_unexpected_and_exit();
+
+        } else
+        syntax_error_unexpected_and_exit();
+
+      } else
+      syntax_error_unexpected_and_exit();
+
+    } else
+    syntax_error_unexpected_and_exit();
+}
+
+void get_riscu_symbol() {
+  uint64_t i;
+  uint64_t help;
+  uint64_t base;
+
+  // reset previously scanned symbol
+  symbol = SYM_EOF;
+  registernumber = 32;
+
+  if (find_next_riscu_character() != CHAR_EOF) {
+    if (is_character_letter()) {
+      // accommodate identifier and null for termination
+      identifier = string_alloc(MAX_IDENTIFIER_LENGTH);
+
+      i = 0;
+
+      while (is_character_letter_or_digit()) {
+        if (i >= MAX_IDENTIFIER_LENGTH) {
+          syntax_error_message("identifier too long");
+
+          exit(EXITCODE_SCANNERERROR);
+        }
+
+        store_character(identifier, i, character);
+
+        i = i + 1;
+
+        get_character();
+      }
+
+      store_character(identifier, i, 0); // null-terminated string
+
+      symbol = riscu_instruction_or_quad();
+
+      // if identifier is not an risc-u instruction, check if identifier is a register
+      if (symbol == 0) {
+        registernumber = register_name();
+        symbol = SYM_REGISTER;
+        
+        // if identifier is not a register, throws error
+        if (registernumber == 32) {
+          syntax_error_message("illegal identifier");
+        }
+      }
+      
+      } else if (is_character_digit()) {
+        // accommodate integer and null for termination
+        integer = string_alloc(MAX_INTEGER_LENGTH);
+        base = 10;
+        i = 0;
+
+        if (character == '0') {
+          help = character;
+          store_character(integer, i, character);
+          i = i + 1;
+          get_character();
+
+          if (character == 'x') {
+            base = 16;
+            store_character(integer, i, character);
+            i = i + 1;
+            get_character();
+
+            while (is_character_hexa_or_digit()) {
+              if (i >= MAX_HEXA_LENGTH) {
+                if (integer_is_signed)
+                  syntax_error_message("signed hexadecimal number out of bound");
+                else
+                  syntax_error_message("hexadecimal number out of bound");
+
+                exit(EXITCODE_SCANNERERROR);
+              }
+
+              store_character(integer, i, character);
+
+              i = i + 1;
+
+              get_character();
+            }
+          }
+
+          else {
+            store_character(integer, i, help);
+            i = i + 1;
+          }
+        }
+
+        if (base == 10) {
+          while (is_character_digit()) {
+            if (i >= MAX_INTEGER_LENGTH) {
+              if (integer_is_signed)
+                syntax_error_message("signed integer out of bound");
+              else
+                syntax_error_message("integer out of bound");
+
+              exit(EXITCODE_SCANNERERROR);
+            }
+
+            store_character(integer, i, character);
+
+            i = i + 1;
+
+            get_character();
+          }
+        }
+
+        store_character(integer, i, 0); // null-terminated string
+
+        literal = atoi(integer);
+
+        if (integer_is_signed)
+          if (literal > INT64_MIN) {
+              syntax_error_message("signed integer out of bound");
+
+              exit(EXITCODE_SCANNERERROR);
+            }
+
+        symbol = SYM_INTEGER;
+
+      } else if (character == CHAR_COMMA) {
+        get_character();
+
+        symbol = SYM_COMMA;
+
+      } else if (character == CHAR_LPARENTHESIS) {
+        get_character();
+
+        symbol = SYM_LPARENTHESIS;
+
+      } else if (character == CHAR_RPARENTHESIS) {
+        get_character();
+
+        symbol = SYM_RPARENTHESIS;
+
+      } else if (character == CHAR_DASH) {
+        get_character();
+
+        symbol = SYM_MINUS;
+
+      } else if (character == CHAR_DOT) {
+        get_character();
+
+        symbol = SYM_DOT;
+
+      } else if (character == CHAR_TILDE) {
+        get_character();
+
+        symbol = SYM_TILDE;
+
+      } else if (character == CHAR_COLON) {
+        get_character();
+
+        symbol = SYM_COLON;
+
+      } else {
+        print_line_number("syntax error", line_number);
+        print("found unknown character ");
+        print_character(character);
+        println();
+
+        exit(EXITCODE_SCANNERERROR);
+      }
+
+    number_of_scanned_symbols = number_of_scanned_symbols + 1;
+  }
+}
+
 // -----------------------------------------------------------------
 // -------------------------- REPLAY ENGINE ------------------------
 // -----------------------------------------------------------------
@@ -10228,6 +11069,8 @@ uint64_t selfie(uint64_t extras) {
         selfie_disassemble(1);
       else if (string_compare(argument, "-l"))
         selfie_load();
+      else if (string_compare(argument, "-a"))
+        selfie_assemble();
       else if (extras == 0) {
         if (string_compare(argument, "-m"))
           return selfie_run(MIPSTER);
