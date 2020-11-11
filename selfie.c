@@ -8826,6 +8826,10 @@ void selfie_assemble() {
   reset_scanner();
   compile_assembly();
 
+  ELF_header = create_elf_header(binary_length, code_length);
+
+  entry_point = ELF_ENTRY_POINT;
+
 }
 
 
