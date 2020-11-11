@@ -1425,7 +1425,6 @@ void selfie_disassemble(uint64_t verbose);
 // -----------------------------------------------------------------
 
 void selfie_assemble();
-void debug_assembly();
 void compile_assembly();
 void compile_riscu_arithmetic_or_comparison();
 void compile_riscu_memory_or_jalr();
@@ -8813,32 +8812,31 @@ void selfie_assemble() {
     exit(EXITCODE_IOERROR);
   }
 
-  //Assignment 2 Preperation
-  binary = zmalloc(MAX_BINARY_LENGTH);
+  binary_name   = source_name;
+  binary        = zmalloc(MAX_BINARY_LENGTH);
 
+  binary_length = 0;
+  code_length   = 0;
+
+  reset_instruction_counters();
+
+  code_line_number = zmalloc(MAX_CODE_LENGTH / INSTRUCTIONSIZE * SIZEOFUINT64);
+  data_line_number = zmalloc(MAX_DATA_LENGTH / WORDSIZE * SIZEOFUINT64);
 
   reset_scanner();
   compile_assembly();
-  printf1("%u\n", (char*) line_number);
+
+  ELF_header = create_elf_header(binary_length, code_length);
+
+  entry_point = ELF_ENTRY_POINT;
+
 }
 
-// for testing and debugging
-void debug_assembly() {
-  uint64_t i;
-  string = string_alloc(MAX_STRING_LENGTH);
-  i = 0;
-
-  while (character != CHAR_EOF) {
-
-    store_character(string, i, character);
-    i = i + 1;
-    get_character();
-  }
-
-  printf1("%s\n", string);
-}
 
 void compile_assembly() { 
+  uint64_t begin_data;
+
+  begin_data = 1;
 
   get_riscu_symbol();
 
@@ -8846,33 +8844,42 @@ void compile_assembly() {
 
     // instruction rd, rs1, rs2
     if (is_riscu_arithmetic_or_comparison()) {
-        compile_riscu_arithmetic_or_comparison();
+      compile_riscu_arithmetic_or_comparison();
 
     // instruction rd, [-]imm(rs1)
     } else if (is_riscu_memory_or_jalr()) {
-        compile_riscu_memory_or_jalr();
+      compile_riscu_memory_or_jalr();
 
     // instruction rd, [-]imm
     } else if (is_riscu_lui_or_jal()) {
-        compile_riscu_lui_or_jal();
+      compile_riscu_lui_or_jal();
 
     // instruction rd,rs1,[-]imm
     } else if (is_riscu_addi_or_beq()) {
-        compile_riscu_addi_or_beq();
+      compile_riscu_addi_or_beq();
 
     } else if (symbol == SYM_ECALL) {
-        get_riscu_symbol();
-        line_number = line_number + 1;
+      emit_ecall();
+      get_riscu_symbol();
+      line_number = line_number + 1;
 
     } else if (symbol == SYM_DOT) {
-        compile_riscu_quad();
+
+      if (begin_data) {
+        begin_data = 0;
+        // no more allocation in code segment from now on
+        code_length = binary_length;
+      }
+
+      compile_riscu_quad();
 
     } else if (symbol == SYM_INTEGER) {
-        compile_riscu_lineinfo();
+      compile_riscu_lineinfo();
 
     } else if (symbol == SYM_NOP) {
-        get_riscu_symbol();
-        line_number = line_number + 1;
+      emit_nop();
+      get_riscu_symbol();
+      line_number = line_number + 1;
 
     } else {
       syntax_error_unexpected_and_exit();
@@ -8884,19 +8891,15 @@ void compile_assembly() {
 
 // instruction rd,rs1,rs2
 void compile_riscu_arithmetic_or_comparison() {
-  // Assignment 2 Preperation
-  // uint64_t instruction;
-  // uint64_t rd_;
-  // uint64_t rs1_;
-  // uint64_t rs2_;
+  uint64_t instruction;
 
     // instruction
-    // instruction = symbol; //Assignment 2 Preperation
+    instruction = symbol;
     get_riscu_symbol();
 
     // instruction rd
     if (symbol == SYM_REGISTER) {
-      // rd_ = registernumber; //Assignment 2 Preperation
+      rd = registernumber;
       get_riscu_symbol();
 
       // instruction rd, 
@@ -8905,7 +8908,7 @@ void compile_riscu_arithmetic_or_comparison() {
 
         // instruction rd, rs1
         if (symbol == SYM_REGISTER) {
-          // rs1_ = registernumber;  //Assignment 2 Preperation
+          rs1 = registernumber;
           get_riscu_symbol();
 
           // instruction rd, rs1,
@@ -8914,54 +8917,52 @@ void compile_riscu_arithmetic_or_comparison() {
 
             // instruction rd, rs1, rs2
             if (symbol == SYM_REGISTER) {
-              // rs2_ = registernumber; //Assignment 2 Preperation
+              rs2 = registernumber;
               get_riscu_symbol();
 
               line_number = line_number + 1;
 
-              // Assignment 2 Preperation
-              // if (instruction == SYM_ADD)
-              //   emit_add(rd_, rs1_, rs2_);
-              // else if (instruction == SYM_SUB)
-              //   emit_sub(rd_, rs1_, rs2_);
-              // else if (instruction == SYM_MUL)
-              //   emit_mul(rd_, rs1_, rs2_);
-              // else if (instruction == SYM_DIVU)
-              //   emit_divu(rd_, rs1_, rs2_);
-              // else if (instruction == SYM_REMU)
-              //   emit_remu(rd_, rs1_, rs2_);
+              if (instruction == SYM_ADD)
+                emit_add(rd, rs1, rs2);
+              else if (instruction == SYM_SUB)
+                emit_sub(rd, rs1, rs2);
+              else if (instruction == SYM_MUL)
+                emit_mul(rd, rs1, rs2);
+              else if (instruction == SYM_DIVU)
+                emit_divu(rd, rs1, rs2);
+              else if (instruction == SYM_REMU)
+                emit_remu(rd, rs1, rs2);
+              else if (instruction == SYM_SLTU)
+                emit_sltu(rd, rs1, rs2);
 
             } else
-            syntax_error_unexpected_and_exit();
+              syntax_error_unexpected_and_exit();
 
           } else
-          syntax_error_unexpected_and_exit();
+            syntax_error_unexpected_and_exit();
 
         } else
-        syntax_error_unexpected_and_exit();
+          syntax_error_unexpected_and_exit();
 
       } else
-      syntax_error_unexpected_and_exit();
+        syntax_error_unexpected_and_exit();
 
     } else
-    syntax_error_unexpected_and_exit();
+      syntax_error_unexpected_and_exit();
 }
+
 
 // instruction rd, [-]imm(rs1)
 void compile_riscu_memory_or_jalr() {
-  // Assignment 2 Preperation
-  // uint64_t instruction;
-  // uint64_t rd_;
-  // uint64_t rs1_;
-  uint64_t immediate_value;
+  uint64_t instruction;
 
     // instruction
-    // instruction = symbol; // Assignment 2 Preperation
+    instruction = symbol;
     get_riscu_symbol();
 
     // instruction rd
     if (symbol == SYM_REGISTER) {
-      // rd_ = registernumber; // Assignment 2 Preperation
+      rd = registernumber;
       get_riscu_symbol();
 
       // instruction rd, 
@@ -8977,12 +8978,11 @@ void compile_riscu_memory_or_jalr() {
         // instruction rd, [-]imm
         if (symbol == SYM_INTEGER) {
           if (integer_is_signed)
-            immediate_value = -literal;
+            imm = -literal;
           else
-            immediate_value = literal;
+            imm = literal;
 
           integer_is_signed = 0;
-          literal = immediate_value; // TODO: Delete for Assignment 2, just to avoid make warnings in Assignment 1
           get_riscu_symbol();
 
           // instruction rd, [-]imm(
@@ -8991,7 +8991,7 @@ void compile_riscu_memory_or_jalr() {
 
             // instruction rd, [-]imm(rs1
             if (symbol == SYM_REGISTER) {
-              // rs1_ = registernumber; // Assignment 2 Preperation
+              rs1 = registernumber;
               get_riscu_symbol();
 
               // instruction rd, [-]imm(rs1)
@@ -8999,47 +8999,43 @@ void compile_riscu_memory_or_jalr() {
                 get_riscu_symbol();
                 line_number = line_number + 1;
 
-                // Assignment 2 Preperation
-                // if (instruction == SYM_LD)
-                //   emit_ld(rd_, rs1_, immediate_value);
-                // else if (instruction == SYM_SD)
-                //   emit_sd(rd_, immediate_value, rs1_); // not sure
-                // else if (instruction == SYM_JALR)
-                //   emit_jalr(rd_, rs1_, immediate_value);
+                if (instruction == SYM_LD)
+                  emit_ld(rd, rs1, imm);
+                else if (instruction == SYM_SD)
+                  emit_sd(rs1, imm, rd);
+                else if (instruction == SYM_JALR)
+                  emit_jalr(rd, rs1, imm);
 
               } else
-              syntax_error_unexpected_and_exit();
+                syntax_error_unexpected_and_exit();
               
             } else
-            syntax_error_unexpected_and_exit();
+              syntax_error_unexpected_and_exit();
 
           } else
-          syntax_error_unexpected_and_exit();
+            syntax_error_unexpected_and_exit();
 
         } else
-        syntax_error_unexpected_and_exit();
+          syntax_error_unexpected_and_exit();
 
       } else
-      syntax_error_unexpected_and_exit();
+        syntax_error_unexpected_and_exit();
 
     } else
-    syntax_error_unexpected_and_exit();
+      syntax_error_unexpected_and_exit();
 }
 
-// instruction rd, [-]imm
+/// instruction rd, [-]imm
 void compile_riscu_lui_or_jal() {
-  // Assignment 2 Preperation
-  // uint64_t instruction;
-  // uint64_t rd_;
-  uint64_t immediate_value;
+  uint64_t instruction;
 
     // instruction
-    // instruction = symbol; //Assignment 2 Preperation
+    instruction = symbol;
     get_riscu_symbol();
 
     // instruction rd
     if (symbol == SYM_REGISTER) {
-      // rd_ = registernumber; // Assignment 2 Preperation
+      rd = registernumber;
       get_riscu_symbol();
 
       // instruction rd, 
@@ -9055,47 +9051,41 @@ void compile_riscu_lui_or_jal() {
         // instruction rd,[-]imm
         if (symbol == SYM_INTEGER) {
           if (integer_is_signed)
-            immediate_value = -literal;
+            imm = -literal;
           else
-            immediate_value = literal;
+            imm = literal;
 
           integer_is_signed = 0;
-          literal = immediate_value; // TODO: Delete for Assignment 2, just to avoid make warnings in Assignment 1
           get_riscu_symbol();
 
           line_number = line_number + 1;
-
-          //Assignment 2 Preperation
-          // if (instruction == SYM_JAL)
-          //   emit_jal(rd_, immediate_value); // not sure
-          // else if (instruction == SYM_LUI)
-          //   emit_lui(rd_, immediate_value);
-
+          
+          if (instruction == SYM_JAL)
+            emit_jal(rd, imm * INSTRUCTIONSIZE);
+          else if (instruction == SYM_LUI) 
+            emit_lui(rd, sign_extend(imm, 20));
+           
         } else
-        syntax_error_unexpected_and_exit();
+          syntax_error_unexpected_and_exit();
 
       } else
-      syntax_error_unexpected_and_exit();
+        syntax_error_unexpected_and_exit();
 
     } else
-    syntax_error_unexpected_and_exit();
+      syntax_error_unexpected_and_exit();
 }
 
 // instruction rd,rs1,[-]imm
 void compile_riscu_addi_or_beq() {
-  //Assignment 2 Preperation
-  // uint64_t instruction;
-  // uint64_t rd_;
-  // uint64_t rs1_;
-  uint64_t immediate_value;
+  uint64_t instruction;
 
     // instruction
-    // instruction = symbol; //Assignment 2 Preperation
+    instruction = symbol;
     get_riscu_symbol();
 
     // instruction rd
     if (symbol == SYM_REGISTER) {
-      // rd_ = registernumber; //Assignment 2 Preperation
+      rd = registernumber;
       get_riscu_symbol();
 
       // instruction rd, 
@@ -9104,7 +9094,7 @@ void compile_riscu_addi_or_beq() {
 
         // instruction rd, rs1
         if (symbol == SYM_REGISTER) {
-          // rs1_ = registernumber; //Assignment 2 Preperation
+          rs1 = registernumber;
           get_riscu_symbol();
 
           // instruction rd, rs1,
@@ -9119,36 +9109,34 @@ void compile_riscu_addi_or_beq() {
 
             if (symbol == SYM_INTEGER) {
               if (integer_is_signed)
-                immediate_value = -literal;
+                imm = -literal;
               else
-                immediate_value = literal;
+                imm = literal;
 
               integer_is_signed = 0;
-              literal = immediate_value; // TODO: Delete for Assignment 2, just to avoid make warnings in Assignment 1
               get_riscu_symbol();
 
               line_number = line_number + 1;
 
-              //Assignment 2 Preperation
-              // if (instruction == SYM_ADDI)
-              //   emit_addi(rd_, rs1_, immediate_value);
-              // else if (instruction == SYM_BEQ)
-              //   emit_beq(rd_, rs1_, immediate_value); // not sure
+              if (instruction == SYM_ADDI)
+                emit_addi(rd, rs1, imm);
+              else if (instruction == SYM_BEQ)
+                emit_beq(rd, rs1, imm * INSTRUCTIONSIZE);
 
             } else
-            syntax_error_unexpected_and_exit();
+              syntax_error_unexpected_and_exit();
 
           } else
-          syntax_error_unexpected_and_exit();
+            syntax_error_unexpected_and_exit();
 
         } else
-        syntax_error_unexpected_and_exit();
+          syntax_error_unexpected_and_exit();
 
       } else
-      syntax_error_unexpected_and_exit();
+        syntax_error_unexpected_and_exit();
 
     } else
-    syntax_error_unexpected_and_exit();
+      syntax_error_unexpected_and_exit();
 }
 
 // .quad 0xint....
@@ -9160,23 +9148,24 @@ void compile_riscu_quad() {
     get_riscu_symbol();
 
     if (symbol == SYM_INTEGER) {
+
+      imm = literal;
+      store_data(binary_length, imm);
+      binary_length = binary_length + WORDSIZE;
+      line_number = line_number + 1;
+
       get_riscu_symbol();
-      line_number = line_number +1;
 
     } else
-    syntax_error_unexpected_and_exit();
+      syntax_error_unexpected_and_exit();
 
   } else 
-  syntax_error_unexpected_and_exit();
+    syntax_error_unexpected_and_exit();
 }
 
 // 0xint(~int): 
 void compile_riscu_lineinfo() {
-  //Assignment 2 Preperation
-  // uint64_t line_reference;
-  // uint64_t immediate_value;
 
-  // immediate_value = literal; //Assignment 2 Preperation
   get_riscu_symbol();
 
     // 0xint(
@@ -9189,7 +9178,6 @@ void compile_riscu_lineinfo() {
 
         // 0xint(~int
         if (symbol == SYM_INTEGER) {
-          // line_reference = literal;
           get_riscu_symbol();
 
           // 0xint(~int)
@@ -9201,19 +9189,19 @@ void compile_riscu_lineinfo() {
               get_riscu_symbol();
 
             } else
-            syntax_error_unexpected_and_exit();
+              syntax_error_unexpected_and_exit();
 
           } else
-          syntax_error_unexpected_and_exit();
+            syntax_error_unexpected_and_exit();
 
         } else
-        syntax_error_unexpected_and_exit();
+          syntax_error_unexpected_and_exit();
 
       } else
-      syntax_error_unexpected_and_exit();
+        syntax_error_unexpected_and_exit();
 
     } else
-    syntax_error_unexpected_and_exit();
+      syntax_error_unexpected_and_exit();
 }
 
 void get_riscu_symbol() {
