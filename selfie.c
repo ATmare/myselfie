@@ -1933,6 +1933,9 @@ uint64_t handle_exception(uint64_t* context);
 uint64_t mipster(uint64_t* to_context);
 uint64_t hypster(uint64_t* to_context);
 
+uint64_t hypster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts);
+uint64_t mipster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts);
+
 uint64_t mixter(uint64_t* to_context, uint64_t mix);
 
 uint64_t minmob(uint64_t* to_context);
@@ -10690,7 +10693,7 @@ uint64_t mipster(uint64_t* to_context) {
 }
 
 // Mares
-uint64_t mipster_multiple_contexts(uint64_t* to_context) {
+uint64_t mipster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts) {
   uint64_t timeout;
   uint64_t* from_context;
 
@@ -10707,11 +10710,20 @@ uint64_t mipster_multiple_contexts(uint64_t* to_context) {
       to_context = get_parent(from_context);
 
       timeout = TIMEROFF;
-    } else if (handle_exception(from_context) == EXIT)
-      return get_exit_code(from_context);
-    else {
+    } else if (handle_exception(from_context) == EXIT) {
+
+      amount_of_contexts = amount_of_contexts - 1;
+      to_context = delete_context(from_context, used_contexts);
+      
+      if (amount_of_contexts == 0)
+        return get_exit_code(from_context);
+      
+    } else {
       // TODO: scheduler should go here
-      to_context = get_next_context(to_context);
+      if (get_next_context(to_context) != (uint64_t*) 0)
+        to_context = get_next_context(to_context);
+      else
+        to_context = used_contexts;
 
       timeout = TIMESLICE;
     }
@@ -10735,7 +10747,7 @@ uint64_t hypster(uint64_t* to_context) {
   }
 }
 
-uint64_t hypster_multiple_contexts(uint64_t* to_context) {
+uint64_t hypster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts) {
   uint64_t* from_context;
 
   print("hypster\n");
@@ -10744,12 +10756,22 @@ uint64_t hypster_multiple_contexts(uint64_t* to_context) {
   while (1) {
     from_context = hypster_switch(to_context, TIMESLICE);
 
-    if (handle_exception(from_context) == EXIT)
-      return get_exit_code(from_context);
-    else
+    if (handle_exception(from_context) == EXIT) {
+      
+      amount_of_contexts = amount_of_contexts - 1;
+      to_context = delete_context(from_context, used_contexts);
+      
+      if (amount_of_contexts == 0)
+        return get_exit_code(from_context);
+      
+    }
+    else {
       // TODO: scheduler should go here
-      // to_context = from_context;
-      to_context = get_next_context(to_context);
+      if (get_next_context(to_context) != (uint64_t*) 0)
+        to_context = get_next_context(to_context);
+      else
+        to_context = used_contexts;
+    }
   }
 }
 
@@ -11030,10 +11052,8 @@ uint64_t selfie_run(uint64_t machine) {
 // Mares
 uint64_t selfie_run_mipster(uint64_t machine) {
   uint64_t exit_code;
+  uint64_t context_counter;
   uint64_t amount_of_contexts;
-  uint64_t* head;
-
-  head = (uint64_t*) 0;
 
   if (binary_length == 0) {
     printf1("%s: nothing to run, debug, or host\n", selfie_name);
@@ -11047,6 +11067,7 @@ uint64_t selfie_run_mipster(uint64_t machine) {
 
   init_memory(128);
   amount_of_contexts = (atoi(peek_argument(0)));
+  context_counter = amount_of_contexts;
 
   if (amount_of_contexts <= 0) {
     printf1("%s: Amount of contexts must be greater than 0.\n", selfie_name);
@@ -11055,14 +11076,12 @@ uint64_t selfie_run_mipster(uint64_t machine) {
   }
 
   // Mares
-   while (amount_of_contexts > 0) {
+   while (context_counter > 0) {
+
     current_context = create_context(MY_CONTEXT, 0);
     boot_loader(current_context);
-    if (head == (uint64_t*) 0)
-      head = current_context;
-    if (amount_of_contexts == 1)
-        set_next_context(head, current_context);
-    amount_of_contexts = amount_of_contexts - 1;
+
+    context_counter = context_counter - 1;
   }
 
   printf3("%s: selfie executing %s with %uMB physical memory", selfie_name,
@@ -11096,17 +11115,17 @@ uint64_t selfie_run_mipster(uint64_t machine) {
   run = 1;
 
   if (machine == MIPSTER)
-    exit_code = mipster_multiple_contexts(current_context);
+    exit_code = mipster_multiple_contexts(current_context, amount_of_contexts);
   else if (machine == DIPSTER)
-    exit_code = mipster_multiple_contexts(current_context);
+    exit_code = mipster_multiple_contexts(current_context, amount_of_contexts);
   else if (machine == RIPSTER)
-    exit_code = mipster_multiple_contexts(current_context);
+    exit_code = mipster_multiple_contexts(current_context, amount_of_contexts);
   else if (machine == MINSTER)
-    exit_code = mipster_multiple_contexts(current_context);
+    exit_code = mipster_multiple_contexts(current_context, amount_of_contexts);
   else if (machine == MOBSTER)
     exit_code = mobster(current_context);
   else if (machine == HYPSTER)
-    exit_code = hypster_multiple_contexts(current_context);
+    exit_code = hypster_multiple_contexts(current_context, amount_of_contexts);
   else
     // change 0 to anywhere between 0% to 100% mipster
     exit_code = mixter(current_context, 0);
