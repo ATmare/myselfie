@@ -101,6 +101,9 @@ uint64_t open(char* filename, uint64_t flags, uint64_t mode);
 // selfie bootstraps void* to uint64_t* and unsigned to uint64_t!
 void* malloc(unsigned long);
 
+// uint64_t fork(); // (Mares?)
+// uint64_t wait(uint64_t* wstatus); // (Mares?)
+
 // -----------------------------------------------------------------
 // ----------------------- LIBRARY PROCEDURES ----------------------
 // -----------------------------------------------------------------
@@ -1078,6 +1081,12 @@ void     implement_brk(uint64_t* context);
 
 uint64_t is_boot_level_zero();
 
+void emit_fork();    // (Mares) 
+uint64_t implement_fork(uint64_t* context);   // (Mares) 
+
+void emit_wait(); // (Mares)
+void implement_wait(uint64_t* context); 
+
 // ------------------------ GLOBAL CONSTANTS -----------------------
 
 uint64_t debug_read  = 0;
@@ -1090,6 +1099,8 @@ uint64_t SYSCALL_READ   = 63;
 uint64_t SYSCALL_WRITE  = 64;
 uint64_t SYSCALL_OPENAT = 56;
 uint64_t SYSCALL_BRK    = 214;
+uint64_t SYSCALL_WAIT   = 96; // (Mares)
+uint64_t SYSCALL_FORK   = 260; // (Mares)
 
 /* DIRFD_AT_FDCWD corresponds to AT_FDCWD in fcntl.h and
    is passed as first argument of the openat system call
@@ -1100,6 +1111,7 @@ uint64_t DIRFD_AT_FDCWD = -100;
 // ------------------------ GLOBAL VARIABLES -----------------------
 
 uint64_t sc_brk = 0; // syscall counter
+uint64_t old_pid = 0;
 
 // -----------------------------------------------------------------
 // ------------------------ HYPSTER SYSCALL ------------------------
@@ -5521,6 +5533,9 @@ void selfie_compile() {
 
   emit_switch();
 
+  emit_fork();
+  emit_wait();
+
   if (GC_ON) {
     emit_fetch_stack_pointer();
     emit_fetch_global_pointer();
@@ -6581,6 +6596,115 @@ void selfie_load() {
 // -----------------------------------------------------------------
 // ----------------------- MIPSTER SYSCALLS ------------------------
 // -----------------------------------------------------------------
+
+// REWRITE !!! Mares
+uint64_t* copy_context(uint64_t* parent) {
+  uint64_t* child_context;
+  uint64_t i;
+  uint64_t page;
+
+  child_context = new_context();
+
+  set_pc(child_context, get_pc(parent));
+
+  set_regs(child_context, smalloc(NUMBEROFREGISTERS * SIZEOFUINT64));
+
+  set_pt(child_context, smalloc(NUMBEROFPAGES * SIZEOFUINT64STAR));
+
+  i = 0;
+
+  // assert: page table is only mapped from beginning up and end down
+
+  // printf1("page: %d\n", page);
+
+  page = get_lowest_lo_page(parent);
+  while (page < get_highest_lo_page(parent)) {
+    map_page(child_context, page, (uint64_t) palloc());
+    page = page + 1;
+  }
+
+  page = get_lowest_hi_page(parent);
+  while (page < get_highest_hi_page(parent)) {
+    map_page(child_context, page, (uint64_t) palloc());
+    page = page + 1;
+  }
+
+  i = 0;
+
+  while (i < NUMBEROFREGISTERS) {
+    *(get_regs(child_context) + i) = *(get_regs(parent) + i);
+
+    i = i + 1;
+  }
+
+  // set_next_context(child_context, get_next_context(parent));
+  // set_prev_context(child_context, (uint64_t*)0);
+  // set_pt(child_context, pt);
+  set_code_seg_start(child_context, get_code_seg_start(parent));
+  set_data_seg_start(child_context, get_data_seg_start(parent));
+  set_heap_seg_start(child_context, get_heap_seg_start(parent));
+  set_lowest_lo_page(child_context, get_lowest_lo_page(parent));
+  set_highest_lo_page(child_context, get_highest_lo_page(parent));
+  set_lowest_hi_page(child_context, get_lowest_hi_page(parent));
+  set_highest_hi_page(child_context, get_highest_hi_page(parent));
+  set_program_break(child_context, get_program_break(parent));
+  set_exception(child_context, get_exception(parent));
+  set_fault(child_context, get_fault(parent));
+  set_exit_code(child_context, get_exit_code(parent));
+  set_parent(child_context, get_parent(parent));
+  set_virtual_context(child_context, get_virtual_context(parent));
+  set_name(child_context, get_name(parent));
+
+  // map_page(child_context, 0, get_frame_for_page(parent, get_lowest_lo_page(parent)));
+  // map_page(child_context, 1, get_frame_for_page(parent, get_lowest_hi_page(parent)));
+  // map_page(child_context, 7, get_frame_for_page(parent, get_highest_hi_page(parent)));
+  
+  return child_context;
+
+}
+
+void emit_fork() {
+  create_symbol_table_entry(LIBRARY_TABLE, "fork", 0, PROCEDURE, UINT64_T, 0, binary_length);
+
+  emit_addi(REG_A7, REG_ZR, SYSCALL_FORK);
+
+  emit_ecall();
+
+  emit_jalr(REG_ZR, REG_RA, 0);
+}
+
+uint64_t implement_fork(uint64_t* context) {
+
+  uint64_t new_pid;
+  uint64_t* child_context;
+
+  new_pid = old_pid + 1;
+  
+  child_context = copy_context(context);
+  
+  old_pid = new_pid;
+
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+
+  return new_pid;
+
+}
+
+void emit_wait() {
+  create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, UINT64_T, 0, binary_length);
+
+  emit_addi(REG_A7, REG_ZR, SYSCALL_WAIT);
+
+  emit_ecall();
+
+  emit_jalr(REG_ZR, REG_RA, 0);
+
+}
+
+void implement_wait(uint64_t* context) {
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+}
+
 
 void emit_exit() {
   create_symbol_table_entry(LIBRARY_TABLE, "exit", 0, PROCEDURE, VOID_T, 0, binary_length);
@@ -10582,6 +10706,10 @@ uint64_t handle_system_call(uint64_t* context) {
     implement_read(context);
   else if (a7 == SYSCALL_WRITE)
     implement_write(context);
+  else if (a7 == SYSCALL_FORK)
+    implement_fork(context);
+  else if (a7 == SYSCALL_WAIT)
+    implement_wait(context);
   else if (a7 == SYSCALL_OPENAT)
     implement_openat(context);
   else if (a7 == SYSCALL_EXIT) {
@@ -10877,6 +11005,7 @@ void map_unmapped_pages(uint64_t* context) {
 
   while (is_page_mapped(get_pt(context), page))
     page = page + 1;
+
 
   while (pavailable()) {
     map_page(context, page, (uint64_t) palloc());
