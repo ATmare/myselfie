@@ -1769,7 +1769,7 @@ uint64_t* add_context_to_list(uint64_t* context, uint64_t* list);
 
 void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context);   // (Mares)
 void adopt_children(uint64_t* context); // (Mares)
-void delete_child(uint64_t* child, uint64_t* parent); // (Mares)
+void delete_child_from_childlist(uint64_t* child, uint64_t* parent); // (Mares)
 
 // print methods used for debugging
 void print_context_variables(uint64_t* context);    // (Mares)
@@ -6647,7 +6647,6 @@ void selfie_load() {
 // ----------------------- MIPSTER SYSCALLS ------------------------
 // -----------------------------------------------------------------
 
-
 void copy_page_table(uint64_t* parent_context, uint64_t* child_context, uint64_t low, uint64_t high) {
   uint64_t offset;
   uint64_t page;
@@ -6710,7 +6709,7 @@ uint64_t* deepcopy_context(uint64_t* parent) {
 
   set_lowest_lo_page(child_context, get_page_of_virtual_address(get_code_seg_start(parent)));
   set_highest_lo_page(child_context, get_page_of_virtual_address(get_program_break(parent)) + 1);
-  set_lowest_hi_page(child_context,  get_page_of_virtual_address(*(get_regs(parent) + 2)) );
+  set_lowest_hi_page(child_context,  get_page_of_virtual_address(*(get_regs(parent) + REG_SP)) );
   set_highest_hi_page(child_context, NUMBEROFPAGES);
 
   set_program_break(child_context, get_program_break(parent));
@@ -6726,10 +6725,10 @@ uint64_t* deepcopy_context(uint64_t* parent) {
 
   // copy page table
   low = get_page_of_virtual_address(get_code_seg_start(child_context));
-  high = get_page_of_virtual_address(get_program_break(child_context)) +1;
+  high = get_page_of_virtual_address(get_program_break(child_context)) + 1;
   copy_page_table(parent, child_context, low ,high);
   
-  low = get_page_of_virtual_address(*(get_regs(parent) + 2));
+  low = get_page_of_virtual_address(*(get_regs(parent) + REG_SP));
   high = NUMBEROFPAGES;
   copy_page_table(parent, child_context, low ,high);
 
@@ -6811,7 +6810,7 @@ void implement_wait(uint64_t* context) {
     else {
       // printf2("I (%d) am waiting. I delete my zombie child: (%d) \n", (char*) context, (char*) get_child_context(zombie));
       zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
-      delete_child(zombie_child, context);
+      delete_child_from_childlist(zombie_child, context);
       set_process_status(context, READY); 
     }
   }
@@ -10324,7 +10323,7 @@ void print_child_list(uint64_t* list) {
   next = list;
   print("____________\n");
   while (next != (uint64_t*) 0) {
-    printf1("next is: %d\n", (char*) get_child_context(next));
+    printf1("child is: %d\n", (char*) get_child_context(next));
     next = get_next_child_ptr(next);
   }
   print("____________\n");
@@ -10377,11 +10376,11 @@ void print_context_variables(uint64_t* context) {
 // add context to list (e.g. used_contexts, zombie_contexts,...)
 uint64_t* add_context_to_list(uint64_t* context, uint64_t* list) {
 
-  set_prev_context(context, (uint64_t*) 0);
-
-  set_next_context(context, list);
   if (list != (uint64_t*)0)
     set_prev_context(list, context);
+
+  set_prev_context(context, (uint64_t*) 0);
+  set_next_context(context, list);
 
   return context;
 
@@ -10402,33 +10401,16 @@ uint64_t* delete_context_from_list(uint64_t* context, uint64_t* list) {
   return list;
 }
 
-// adds all non-zombie children of context to INIT_PROCESS
-void adopt_children(uint64_t* context) {
-  uint64_t* child;
-  uint64_t* child_context;
-
-  child = get_children(context);
-
-  while (child != (uint64_t*) 0) {
-    child_context = get_child_context(child);
-    
-    if (get_process_status(child_context) != ZOMBIE) {
-      set_parent_fork(child_context, INIT_PROCESS);
-      add_child_to_childlist(INIT_PROCESS, child_context);
-    }
-    child = get_next_child_ptr(child);
-  }
-}
-
+// add child_context to childlist of parent_context
 void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context) {
   uint64_t* child_entry;
   uint64_t* parent_list;
 
-  parent_list = get_children(parent_context);
   child_entry = allocate_child();
+  parent_list = get_children(parent_context);
   set_child_context(child_entry, child_context);
 
-  // if child_context is the first child
+  // if parent_children has no children yet
   if (get_children(parent_context) == (uint64_t*) 0) {
 
     set_next_child_ptr(child_entry, (uint64_t*) 0);
@@ -10444,31 +10426,50 @@ void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context) {
   set_children(parent_context, child_entry);
 }
 
-void delete_child(uint64_t* child, uint64_t* parent) {
-  uint64_t* help;
+// delete child_to_delete from childlist of parent
+void delete_child_from_childlist(uint64_t* child_to_delete, uint64_t* parent) {
+  uint64_t* child;
 
-  help = get_children(parent);
+  child = get_children(parent);
 
   // if child is first in the list
-  if (get_child_context(help) == get_child_context(child))
-    set_children(parent, get_next_child_ptr(help));
+  if (get_child_context(child) == get_child_context(child_to_delete))
+    set_children(parent, get_next_child_ptr(child));
 
   else {
     // if child is not first in the list, search for it
-    while (help != (uint64_t*) 0) {
+    while (child != (uint64_t*) 0) {
       // if child was found in list
-      if (get_child_context(help) == get_child_context(child)) {
+      if (get_child_context(child) == get_child_context(child_to_delete)) {
         // if found child has a precessor
-        if (get_prev_child_ptr(help) != (uint64_t*) 0)
-          set_next_child_ptr(get_prev_child_ptr(help), get_next_child_ptr(help));
+        if (get_prev_child_ptr(child) != (uint64_t*) 0)
+          set_next_child_ptr(get_prev_child_ptr(child), get_next_child_ptr(child));
         // if found child has a successor
-        if (get_next_child_ptr(help) != (uint64_t*) 0)
-          set_prev_child_ptr(get_next_child_ptr(help), get_prev_child_ptr(help));
+        if (get_next_child_ptr(child) != (uint64_t*) 0)
+          set_prev_child_ptr(get_next_child_ptr(child), get_prev_child_ptr(child));
 
-        help = (uint64_t*) 0;
+        child = (uint64_t*) 0;
       } else
-        help = get_next_child_ptr(help);
+        child = get_next_child_ptr(child);
     }
+  }
+}
+
+// adds all non-zombie children of context to childlist of INIT_PROCESS
+void adopt_children(uint64_t* context) {
+  uint64_t* child;
+  uint64_t* child_context;
+
+  child = get_children(context);
+
+  while (child != (uint64_t*) 0) {
+    child_context = get_child_context(child);
+    
+    if (get_process_status(child_context) != ZOMBIE) {
+      set_parent_fork(child_context, INIT_PROCESS);
+      add_child_to_childlist(INIT_PROCESS, child_context);
+    }
+    child = get_next_child_ptr(child);
   }
 }
 
