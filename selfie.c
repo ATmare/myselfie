@@ -101,8 +101,8 @@ uint64_t open(char* filename, uint64_t flags, uint64_t mode);
 // selfie bootstraps void* to uint64_t* and unsigned to uint64_t!
 void* malloc(unsigned long);
 
-// uint64_t fork(); // (Mares?)
-// uint64_t wait(uint64_t* wstatus); // (Mares?)
+int fork(); // (Mares)
+uint64_t wait(uint64_t* wstatus); // (Mares)
 
 // -----------------------------------------------------------------
 // ----------------------- LIBRARY PROCEDURES ----------------------
@@ -1081,11 +1081,11 @@ void     implement_brk(uint64_t* context);
 
 uint64_t is_boot_level_zero();
 
-void emit_fork();    // (Mares) 
-uint64_t implement_fork(uint64_t* context);   // (Mares) 
+void emit_fork();                              // (Mares) 
+uint64_t implement_fork(uint64_t* context);    // (Mares) 
 
-void emit_wait(); // (Mares)
-void implement_wait(uint64_t* context); 
+void emit_wait();                              // (Mares)
+void implement_wait(uint64_t* context);        // (Mares)
 
 // ------------------------ GLOBAL CONSTANTS -----------------------
 
@@ -1099,8 +1099,8 @@ uint64_t SYSCALL_READ   = 63;
 uint64_t SYSCALL_WRITE  = 64;
 uint64_t SYSCALL_OPENAT = 56;
 uint64_t SYSCALL_BRK    = 214;
-uint64_t SYSCALL_WAIT   = 96; // (Mares)
-uint64_t SYSCALL_FORK   = 260; // (Mares)
+uint64_t SYSCALL_WAIT   = 404; // (Mares)
+uint64_t SYSCALL_FORK   = 402; // (Mares)
 
 /* DIRFD_AT_FDCWD corresponds to AT_FDCWD in fcntl.h and
    is passed as first argument of the openat system call
@@ -1167,6 +1167,8 @@ uint64_t* tlb(uint64_t* table, uint64_t vaddr);
 uint64_t load_virtual_memory(uint64_t* table, uint64_t vaddr);
 void     store_virtual_memory(uint64_t* table, uint64_t vaddr, uint64_t data);
 
+uint64_t* deepcopy_context(uint64_t* parent);  // (Mares)
+
 // ------------------------ GLOBAL CONSTANTS -----------------------
 
 uint64_t debug_tlb = 0;
@@ -1181,7 +1183,7 @@ uint64_t NUMBEROFPAGES = 1048576; // VIRTUALMEMORYSIZE / PAGESIZE
 
 uint64_t NUMBEROFLEAFPTES = 512; // number of leaf page table entries == PAGESIZE / SIZEOFUINT64STAR
 
-uint64_t PAGETABLETREE = 1; // two-level page table is default
+uint64_t PAGETABLETREE = 1; // two-level page table is default. 1 means tree.
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
@@ -1761,6 +1763,20 @@ uint64_t* find_context(uint64_t* parent, uint64_t* vctxt);
 void      free_context(uint64_t* context);
 uint64_t* delete_context(uint64_t* context, uint64_t* from);
 
+// delete & add without updating free_context list
+uint64_t* delete_context_from_list(uint64_t* context, uint64_t* list);
+uint64_t* add_context_to_list(uint64_t* context, uint64_t* list);
+
+void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context);   // (Mares)
+void adopt_children(uint64_t* context); // (Mares)
+void delete_child(uint64_t* child, uint64_t* parent); // (Mares)
+
+// print methods used for debugging
+void print_context_variables(uint64_t* context);    // (Mares)
+void print_contexts_of_context(uint64_t* context);  // (Mares)
+void print_child_list(uint64_t* list);              // (Mares)
+void print_list(uint64_t* list);                    // (Mares)
+
 // context struct:
 // +----+-----------------+
 // |  0 | next context    | pointer to next context
@@ -1788,11 +1804,27 @@ uint64_t* delete_context(uint64_t* context, uint64_t* from);
 // | 21 | gcs counter     | number of gc runs in gc period
 // | 22 | gc enabled      | flag indicating whether to use gc or not
 // +----+-----------------+
+// | 23 | children        | children created by fork()
+// | 24 | parent_fork     | parent process created by fork()
+// | 25 | process status  | Process status can be READY, ZOMBIE, RUNNING, BLOCKED
+// +----+-----------------+
 
 // CAUTION: contexts are extended in the symbolic execution engine!
 
+uint64_t* allocate_child() {
+  return smalloc(3 * SIZEOFUINT64STAR);
+}
+
+void set_child_context(uint64_t* child_entry, uint64_t* child_context)       { *child_entry         = (uint64_t) child_context; }
+void set_next_child_ptr(uint64_t* child_entry, uint64_t* sibling_entry)      { *(child_entry + 1)   = (uint64_t) sibling_entry; }
+void set_prev_child_ptr(uint64_t* child_entry, uint64_t* sibling_entry)      { *(child_entry + 2)   = (uint64_t) sibling_entry; }
+
+uint64_t* get_child_context(uint64_t* child_entry)        { return (uint64_t*) *child_entry;       } // returns a context
+uint64_t* get_next_child_ptr(uint64_t* child_entry)       { return (uint64_t*) *(child_entry + 1); }
+uint64_t* get_prev_child_ptr(uint64_t* child_entry)       { return (uint64_t*) *(child_entry + 2); }
+
 uint64_t* allocate_context() {
-  return smalloc(9 * SIZEOFUINT64STAR + 14 * SIZEOFUINT64);
+  return smalloc(11 * SIZEOFUINT64STAR + 15 * SIZEOFUINT64);
 }
 
 uint64_t next_context(uint64_t* context)    { return (uint64_t) context; }
@@ -1820,6 +1852,10 @@ uint64_t free_list_head(uint64_t* context)   { return (uint64_t) (context + 20);
 uint64_t gcs_in_period(uint64_t* context)    { return (uint64_t) (context + 21); }
 uint64_t use_gc_kernel(uint64_t* context)    { return (uint64_t) (context + 22); }
 
+uint64_t children(uint64_t* context)         { return (uint64_t) (context + 23); }
+uint64_t parent_fork(uint64_t* context)      { return (uint64_t) (context + 24); }
+uint64_t process_status(uint64_t* context)   { return (uint64_t) (context + 25); }
+
 uint64_t* get_next_context(uint64_t* context)    { return (uint64_t*) *context; }
 uint64_t* get_prev_context(uint64_t* context)    { return (uint64_t*) *(context + 1); }
 uint64_t  get_pc(uint64_t* context)              { return             *(context + 2); }
@@ -1845,6 +1881,10 @@ uint64_t* get_free_list_head(uint64_t* context)   { return (uint64_t*) *(context
 uint64_t  get_gcs_in_period(uint64_t* context)    { return             *(context + 21); }
 uint64_t  get_use_gc_kernel(uint64_t* context)    { return             *(context + 22); }
 
+uint64_t*  get_children(uint64_t* context)        { return (uint64_t*) *(context + 23); }
+uint64_t*  get_parent_fork(uint64_t* context)     { return (uint64_t*) *(context + 24); }
+uint64_t   get_process_status(uint64_t* context)  { return             *(context + 25); }
+
 void set_next_context(uint64_t* context, uint64_t* next)      { *context        = (uint64_t) next; }
 void set_prev_context(uint64_t* context, uint64_t* prev)      { *(context + 1)  = (uint64_t) prev; }
 void set_pc(uint64_t* context, uint64_t pc)                   { *(context + 2)  = pc; }
@@ -1869,6 +1909,10 @@ void set_used_list_head(uint64_t* context, uint64_t* used_list_head) { *(context
 void set_free_list_head(uint64_t* context, uint64_t* free_list_head) { *(context + 20) = (uint64_t) free_list_head; }
 void set_gcs_in_period(uint64_t* context, uint64_t gcs)              { *(context + 21) = gcs; }
 void set_use_gc_kernel(uint64_t* context, uint64_t use)              { *(context + 22) = use; }
+
+void set_children(uint64_t* context, uint64_t* child)                { *(context + 23) = (uint64_t) child; }
+void set_parent_fork(uint64_t* context, uint64_t* parent)            { *(context + 24) = (uint64_t) parent;}
+void set_process_status(uint64_t* context, uint64_t status)          { *(context + 25) = status; }  // 0 = ready, 1 = blocked, 2 = running, 3 = zombie
 
 // -----------------------------------------------------------------
 // -------------------------- MICROKERNEL --------------------------
@@ -1902,12 +1946,20 @@ uint64_t is_valid_segment_write(uint64_t vaddr);
 uint64_t debug_create = 0;
 uint64_t debug_map    = 0;
 
+uint64_t READY = 0;
+uint64_t BLOCKED = 1;
+uint64_t RUNNING = 2;
+uint64_t ZOMBIE = 3;
+
 // ------------------------ GLOBAL VARIABLES -----------------------
 
 uint64_t* current_context = (uint64_t*) 0; // context currently running
 
 uint64_t* used_contexts = (uint64_t*) 0; // doubly-linked list of used contexts
 uint64_t* free_contexts = (uint64_t*) 0; // singly-linked list of free contexts
+
+uint64_t* zombie_contexts = (uint64_t*) 0;
+uint64_t* blocked_contexts = (uint64_t*) 0;
 
 // ------------------------- INITIALIZATION ------------------------
 
@@ -1941,6 +1993,7 @@ uint64_t handle_page_fault(uint64_t* context);
 uint64_t handle_division_by_zero(uint64_t* context);
 uint64_t handle_timer(uint64_t* context);
 uint64_t handle_exception(uint64_t* context);
+uint64_t handle_context_scheduling(uint64_t* context); // (Mares)
 
 uint64_t mipster(uint64_t* to_context);
 uint64_t hypster(uint64_t* to_context);
@@ -1964,8 +2017,8 @@ uint64_t selfie_run(uint64_t machine);
 uint64_t selfie_run_mipster(uint64_t machine);
 
 // ------------------------ GLOBAL CONSTANTS -----------------------
-
 uint64_t* MY_CONTEXT = (uint64_t*) 0;
+uint64_t* INIT_PROCESS = (uint64_t*) 0;
 
 uint64_t DONOTEXIT = 0;
 uint64_t EXIT      = 1;
@@ -5528,11 +5581,8 @@ void selfie_compile() {
   emit_read();
   emit_write();
   emit_open();
-
   emit_malloc();
-
   emit_switch();
-
   emit_fork();
   emit_wait();
 
@@ -6590,63 +6640,79 @@ void selfie_load() {
 
   printf2("%s: failed to load code from input file %s\n", selfie_name, binary_name);
 
-  exit(EXITCODE_IOERROR);
+  exit(EXITCODE_IOERROR); 
 }
 
 // -----------------------------------------------------------------
 // ----------------------- MIPSTER SYSCALLS ------------------------
 // -----------------------------------------------------------------
 
-// REWRITE !!! Mares
-uint64_t* copy_context(uint64_t* parent) {
+
+void copy_page_table(uint64_t* parent_context, uint64_t* child_context, uint64_t low, uint64_t high) {
+  uint64_t offset;
+  uint64_t page;
+  uint64_t data;
+
+  data = 0;
+  offset = 0;
+  page = low;
+
+  while (page < high) {
+
+    if (is_page_mapped(get_pt(parent_context), page)) {
+
+      while(offset < PAGESIZE) {
+        data = load_virtual_memory(get_pt(parent_context), page * PAGESIZE + offset);
+        if (is_virtual_address_mapped(get_pt(parent_context), page * PAGESIZE + offset))
+          map_and_store(child_context, page * PAGESIZE + offset, data);
+        offset = offset + 8;
+      }
+      offset = 0;
+    }
+    page = page + 1;
+  }
+}
+
+uint64_t* deepcopy_context(uint64_t* parent) {
   uint64_t* child_context;
   uint64_t i;
-  uint64_t page;
+  uint64_t high;
+  uint64_t low;
 
   child_context = new_context();
 
-  set_pc(child_context, get_pc(parent));
+  // allocate page table
+  if (PAGETABLETREE == 1)
+    set_pt(child_context, smalloc(NUMBEROFPAGES / NUMBEROFLEAFPTES * SIZEOFUINT64STAR));
+  else
+    set_pt(child_context, smalloc(NUMBEROFPAGES * SIZEOFUINT64STAR));
 
+  // copy registers
   set_regs(child_context, smalloc(NUMBEROFREGISTERS * SIZEOFUINT64));
-
-  set_pt(child_context, smalloc(NUMBEROFPAGES * SIZEOFUINT64STAR));
-
+  
   i = 0;
-
-  // assert: page table is only mapped from beginning up and end down
-
-  // printf1("page: %d\n", page);
-
-  page = get_lowest_lo_page(parent);
-  while (page < get_highest_lo_page(parent)) {
-    map_page(child_context, page, (uint64_t) palloc());
-    page = page + 1;
-  }
-
-  page = get_lowest_hi_page(parent);
-  while (page < get_highest_hi_page(parent)) {
-    map_page(child_context, page, (uint64_t) palloc());
-    page = page + 1;
-  }
-
-  i = 0;
-
   while (i < NUMBEROFREGISTERS) {
     *(get_regs(child_context) + i) = *(get_regs(parent) + i);
 
     i = i + 1;
   }
 
-  // set_next_context(child_context, get_next_context(parent));
-  // set_prev_context(child_context, (uint64_t*)0);
-  // set_pt(child_context, pt);
+  // set children / parent dependencies
+  set_parent_fork(child_context, parent);
+  add_child_to_childlist(parent, child_context);
+  set_process_status(child_context, READY);
+
+  // copy parent context variables
+  set_pc(child_context, get_pc(parent));
   set_code_seg_start(child_context, get_code_seg_start(parent));
   set_data_seg_start(child_context, get_data_seg_start(parent));
   set_heap_seg_start(child_context, get_heap_seg_start(parent));
-  set_lowest_lo_page(child_context, get_lowest_lo_page(parent));
-  set_highest_lo_page(child_context, get_highest_lo_page(parent));
-  set_lowest_hi_page(child_context, get_lowest_hi_page(parent));
-  set_highest_hi_page(child_context, get_highest_hi_page(parent));
+
+  set_lowest_lo_page(child_context, get_page_of_virtual_address(get_code_seg_start(parent)));
+  set_highest_lo_page(child_context, get_page_of_virtual_address(get_program_break(parent)) + 1);
+  set_lowest_hi_page(child_context,  get_page_of_virtual_address(*(get_regs(parent) + 2)) );
+  set_highest_hi_page(child_context, NUMBEROFPAGES);
+
   set_program_break(child_context, get_program_break(parent));
   set_exception(child_context, get_exception(parent));
   set_fault(child_context, get_fault(parent));
@@ -6655,10 +6721,18 @@ uint64_t* copy_context(uint64_t* parent) {
   set_virtual_context(child_context, get_virtual_context(parent));
   set_name(child_context, get_name(parent));
 
-  // map_page(child_context, 0, get_frame_for_page(parent, get_lowest_lo_page(parent)));
-  // map_page(child_context, 1, get_frame_for_page(parent, get_lowest_hi_page(parent)));
-  // map_page(child_context, 7, get_frame_for_page(parent, get_highest_hi_page(parent)));
+  set_used_list_head(child_context, get_used_list_head(parent));
+  set_free_list_head(child_context, get_free_list_head(parent));
+
+  // copy page table
+  low = get_page_of_virtual_address(get_code_seg_start(child_context));
+  high = get_page_of_virtual_address(get_program_break(child_context)) +1;
+  copy_page_table(parent, child_context, low ,high);
   
+  low = get_page_of_virtual_address(*(get_regs(parent) + 2));
+  high = NUMBEROFPAGES;
+  copy_page_table(parent, child_context, low ,high);
+
   return child_context;
 
 }
@@ -6674,24 +6748,27 @@ void emit_fork() {
 }
 
 uint64_t implement_fork(uint64_t* context) {
-
   uint64_t new_pid;
   uint64_t* child_context;
 
   new_pid = old_pid + 1;
-  
-  child_context = copy_context(context);
-  
-  old_pid = new_pid;
+
+  child_context = deepcopy_context(context);
 
   set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+  set_pc(child_context, get_pc(child_context) + INSTRUCTIONSIZE);
 
-  return new_pid;
+  *(get_regs(context) + REG_A0) = new_pid;
+  *(get_regs(child_context) + REG_A0) = 0;
 
+  old_pid = new_pid;
+
+  return old_pid;
 }
 
 void emit_wait() {
-  create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, UINT64_T, 0, binary_length);
+
+  create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, VOID_T, 0, binary_length);
 
   emit_addi(REG_A7, REG_ZR, SYSCALL_WAIT);
 
@@ -6702,6 +6779,43 @@ void emit_wait() {
 }
 
 void implement_wait(uint64_t* context) {
+  uint64_t* child;
+  uint64_t* zombie_child;
+
+  child = get_children(context);
+  zombie_child = (uint64_t*) 0;
+  
+  // if context has children
+  if (child != (uint64_t*) 0) {
+
+    while (child != (uint64_t*) 0) {
+
+      if (get_process_status(get_child_context(child)) == ZOMBIE) {
+        zombie_child = child;
+        child = (uint64_t*) 0;
+      } else {
+        child = get_next_child_ptr(child);
+      }
+    }
+    // if context has children, but no zombie children
+    if (zombie_child == (uint64_t*) 0) {
+      if (context == INIT_PROCESS) {
+        set_process_status(context, READY);
+      } else {
+          set_process_status(context, BLOCKED);
+          used_contexts = delete_context_from_list(context, used_contexts);
+          blocked_contexts = add_context_to_list(context, blocked_contexts);
+      }
+    } 
+    // if a zombie child was found, delete it
+    else {
+      // printf2("I (%d) am waiting. I delete my zombie child: (%d) \n", (char*) context, (char*) get_child_context(zombie));
+      zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
+      delete_child(zombie_child, context);
+      set_process_status(context, READY); 
+    }
+  }
+
   set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
 }
 
@@ -9701,8 +9815,9 @@ void decode() {
   }
 
   if (is == 0) {
-    if (run)
+    if (run) {
       throw_exception(EXCEPTION_UNKNOWNINSTRUCTION, pc);
+    }
     else {
       //report the error on the console
       output_fd = 1;
@@ -10093,9 +10208,10 @@ void print_profile(uint64_t* context) {
 uint64_t* new_context() {
   uint64_t* context;
 
-  if (free_contexts == (uint64_t*) 0)
+  if (free_contexts == (uint64_t*) 0) {
     context = allocate_context();
-  else {
+    set_children(context, (uint64_t*) 0);
+  } else {
     context = free_contexts;
 
     free_contexts = get_next_context(free_contexts);
@@ -10202,6 +10318,160 @@ uint64_t* delete_context(uint64_t* context, uint64_t* from) {
   return from;
 }
 
+// Print method used for debugging context dependencies
+void print_child_list(uint64_t* list) {
+  uint64_t* next;
+  next = list;
+  print("____________\n");
+  while (next != (uint64_t*) 0) {
+    printf1("next is: %d\n", (char*) get_child_context(next));
+    next = get_next_child_ptr(next);
+  }
+  print("____________\n");
+}
+
+// Print method used for debugging context dependencies
+void print_contexts_of_context(uint64_t* context) {
+  printf2("\n My (%d) parent is: %d \n", (char*) context, (char*) get_parent_fork(context));
+  print("My child list is:\n");
+  print_child_list(get_children(context));
+}
+
+// Print method used for debugging context dependencies
+void print_list(uint64_t* list) {
+  uint64_t* next;
+  next = list;
+  print("____________\n");
+  while (next != (uint64_t*) 0) {
+    printf1("next is: %d\n", (char*) next);
+    next = get_next_context(next);
+  }
+  print("____________\n");
+}
+
+// Print method used for debugging context dependencies
+void print_context_variables(uint64_t* context) {
+  printf1("\n>>>> CONTEXT <<<<<:\n %d\n", (char*) context);
+  printf1("Lowest Low: %d\n", (char*) get_lowest_lo_page(context));
+  printf1("Highest Low: %d\n", (char*) get_highest_lo_page(context));
+  printf1("Lowest High: %d\n", (char*) get_lowest_hi_page(context));
+  printf1("Hihgest High: %d\n", (char*) get_highest_hi_page(context));
+  printf1("Next Context: %d\n", (char*) get_next_context(context));
+  printf1("Prev Context: %d\n", (char*) get_prev_context(context));
+  printf1("PC: %d\n", (char*) get_pc(context));
+  printf1("Page Table: %d\n", (char*) get_pt(context));
+  printf1("Parent: %d\n", (char*) get_parent(context));
+  printf1("Code Segment start: %d\n", (char*) get_code_seg_start(context));
+  printf1("Data Segment start: %d\n", (char*) get_data_seg_start(context));
+  printf1("Heap Segment start: %d\n", (char*) get_heap_seg_start(context));
+  printf1("Program Break: %d\n", (char*) get_program_break(context));
+  printf1("Fault: %d\n", (char*) get_fault(context));
+  printf1("Virtual Context: %d\n", (char*) get_virtual_context(context));
+  printf1("Used list: %d\n", (char*) get_used_list_head(context));
+  printf1("Free list: %d\n", (char*) get_free_list_head(context));
+  printf1("Children list: %d\n", (char*) get_children(context));
+  printf1("Fork Parent: %d\n", (char*) get_parent_fork(context));
+  printf1("Process Status: %d\n\n", (char*) get_process_status(context));
+}
+
+// add context to list (e.g. used_contexts, zombie_contexts,...)
+uint64_t* add_context_to_list(uint64_t* context, uint64_t* list) {
+
+  set_prev_context(context, (uint64_t*) 0);
+
+  set_next_context(context, list);
+  if (list != (uint64_t*)0)
+    set_prev_context(list, context);
+
+  return context;
+
+}
+
+// delete context from list (e.g. used_contexts, zombie_contexts,...)
+uint64_t* delete_context_from_list(uint64_t* context, uint64_t* list) {
+
+  if (get_next_context(context) != (uint64_t*) 0)
+    set_prev_context(get_next_context(context), get_prev_context(context));
+
+  if (get_prev_context(context) != (uint64_t*) 0) {
+    set_next_context(get_prev_context(context), get_next_context(context));
+    set_prev_context(context, (uint64_t*) 0);
+  } else
+    list = get_next_context(context);
+
+  return list;
+}
+
+// adds all non-zombie children of context to INIT_PROCESS
+void adopt_children(uint64_t* context) {
+  uint64_t* child;
+  uint64_t* child_context;
+
+  child = get_children(context);
+
+  while (child != (uint64_t*) 0) {
+    child_context = get_child_context(child);
+    
+    if (get_process_status(child_context) != ZOMBIE) {
+      set_parent_fork(child_context, INIT_PROCESS);
+      add_child_to_childlist(INIT_PROCESS, child_context);
+    }
+    child = get_next_child_ptr(child);
+  }
+}
+
+void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context) {
+  uint64_t* child_entry;
+  uint64_t* parent_list;
+
+  parent_list = get_children(parent_context);
+  child_entry = allocate_child();
+  set_child_context(child_entry, child_context);
+
+  // if child_context is the first child
+  if (get_children(parent_context) == (uint64_t*) 0) {
+
+    set_next_child_ptr(child_entry, (uint64_t*) 0);
+    set_prev_child_ptr(child_entry, (uint64_t*) 0);
+
+  }
+  // if child_context has siblings
+  else {
+    set_prev_child_ptr(parent_list, child_entry);
+    set_next_child_ptr(child_entry, get_children(parent_context));
+  }
+
+  set_children(parent_context, child_entry);
+}
+
+void delete_child(uint64_t* child, uint64_t* parent) {
+  uint64_t* help;
+
+  help = get_children(parent);
+
+  // if child is first in the list
+  if (get_child_context(help) == get_child_context(child))
+    set_children(parent, get_next_child_ptr(help));
+
+  else {
+    // if child is not first in the list, search for it
+    while (help != (uint64_t*) 0) {
+      // if child was found in list
+      if (get_child_context(help) == get_child_context(child)) {
+        // if found child has a precessor
+        if (get_prev_child_ptr(help) != (uint64_t*) 0)
+          set_next_child_ptr(get_prev_child_ptr(help), get_next_child_ptr(help));
+        // if found child has a successor
+        if (get_next_child_ptr(help) != (uint64_t*) 0)
+          set_prev_child_ptr(get_next_child_ptr(help), get_prev_child_ptr(help));
+
+        help = (uint64_t*) 0;
+      } else
+        help = get_next_child_ptr(help);
+    }
+  }
+}
+
 // -----------------------------------------------------------------
 // -------------------------- MICROKERNEL --------------------------
 // -----------------------------------------------------------------
@@ -10210,6 +10480,8 @@ uint64_t* create_context(uint64_t* parent, uint64_t* vctxt) {
   uint64_t* context;
 
   context = new_context();
+
+  set_process_status(context, READY);
 
   init_context(context, parent, vctxt);
 
@@ -10306,9 +10578,17 @@ void map_page(uint64_t* context, uint64_t page, uint64_t frame) {
       if (page <= get_page_of_virtual_address(get_program_break(context) - WORDSIZE)) {
         set_lowest_lo_page(context, lowest_page(page, get_lowest_lo_page(context)));
         set_highest_lo_page(context, highest_page(page, get_highest_lo_page(context)));
+        // if (page < get_lowest_lo_page(context))
+        //   set_lowest_lo_page(context, page);
+        // else if (page > get_highest_lo_page(context))
+        //   set_highest_lo_page(context, page);
       } else {
         set_lowest_hi_page(context, lowest_page(page, get_lowest_hi_page(context)));
         set_highest_hi_page(context, highest_page(page, get_highest_hi_page(context)));
+        // if (page < get_lowest_hi_page(context))
+        //   set_lowest_hi_page(context, page);
+        // else if (page > get_highest_hi_page(context))
+        //   set_highest_hi_page(context, page);
       }
     } // else assert: frame == get_frame_for_page(table, page)
   }
@@ -10323,6 +10603,7 @@ void map_page(uint64_t* context, uint64_t page, uint64_t frame) {
 void restore_region(uint64_t* context, uint64_t* table, uint64_t* parent_table, uint64_t lo, uint64_t hi) {
   uint64_t frame;
 
+  // while (lo <= hi) {
   while (lo < hi) {
     if (is_virtual_address_mapped(parent_table, (uint64_t) get_PTE_address_for_page(parent_table, table, lo))) {
       frame = load_virtual_memory(parent_table, (uint64_t) get_PTE_address_for_page(parent_table, table, lo));
@@ -10345,6 +10626,7 @@ void restore_context(uint64_t* context) {
   uint64_t hi;
 
   if (get_parent(context) != MY_CONTEXT) {
+
     // download changes in virtual context in parent address space to context
     parent_table = get_pt(get_parent(context));
 
@@ -10394,6 +10676,7 @@ void restore_context(uint64_t* context) {
     set_free_list_head(context, (uint64_t*) load_virtual_memory(parent_table, free_list_head(vctxt)));
     set_gcs_in_period(context, load_virtual_memory(parent_table, gcs_in_period(vctxt)));
     set_use_gc_kernel(context, load_virtual_memory(parent_table, use_gc_kernel(vctxt)));
+
   }
 
   // restore machine state
@@ -10715,8 +10998,8 @@ uint64_t handle_system_call(uint64_t* context) {
   else if (a7 == SYSCALL_EXIT) {
     implement_exit(context);
 
-    // TODO: exit only if all contexts have exited
-    return EXIT;
+    return handle_context_scheduling(context);
+    // return EXIT;
   } else {
     printf2("%s: unknown system call %u\n", selfie_name, (char*) a7);
 
@@ -10792,9 +11075,76 @@ uint64_t handle_exception(uint64_t* context) {
   }
 }
 
+// scheduler for fork / wait (Mares)
+uint64_t handle_context_scheduling(uint64_t* context) {
+
+  // if from_context that exits has children, init_process adopts the non-zombie children
+  if (context != INIT_PROCESS)
+    adopt_children(context);
+
+  // if from_context has a parent
+  if (get_parent_fork(context) != (uint64_t*) 0) {
+
+    // and parent has not called wait() yet, make from_context a zombie
+    if (get_process_status(get_parent_fork(context)) != BLOCKED) {
+      set_process_status(context, ZOMBIE);
+
+      used_contexts = delete_context_from_list(context, used_contexts);
+      zombie_contexts = add_context_to_list(context, zombie_contexts);
+
+    } 
+    // if parent is blocked, add it to ready-list and delete if from blocked-list
+    else {
+      set_process_status(get_parent_fork(context), READY);
+      used_contexts = delete_context(context, used_contexts);
+      blocked_contexts = delete_context_from_list(get_parent_fork(context), blocked_contexts);
+      used_contexts = add_context_to_list(get_parent_fork(context), used_contexts);
+    }
+
+    return DONOTEXIT;
+
+  } else
+
+    return EXIT;
+}
+
+// original mipster
+// uint64_t mipster(uint64_t* to_context) {
+//   uint64_t timeout;
+//   uint64_t* from_context;
+//   uint64_t counter;
+//   counter = 0; 
+
+//   print("mipster\n");
+//   printf1("%s: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n", selfie_name);
+
+//   timeout = TIMESLICE;
+
+//   while (1) {
+//     from_context = mipster_switch(to_context, timeout);
+
+//     if (get_parent(from_context) != MY_CONTEXT) {
+//       // switch to parent which is in charge of handling exceptions
+//       to_context = get_parent(from_context);
+
+//       timeout = TIMEROFF;
+//     } else if (handle_exception(from_context) == EXIT) {
+//         return get_exit_code(from_context);
+//     }
+//     else {
+//       // TODO: scheduler should go here
+//       to_context = from_context;
+
+//       timeout = TIMESLICE;
+//     }
+//   }
+// }
+
+// mipster for fork / wait
 uint64_t mipster(uint64_t* to_context) {
   uint64_t timeout;
   uint64_t* from_context;
+  uint64_t* next_context;
 
   print("mipster\n");
   printf1("%s: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n", selfie_name);
@@ -10803,24 +11153,27 @@ uint64_t mipster(uint64_t* to_context) {
 
   while (1) {
     from_context = mipster_switch(to_context, timeout);
+    next_context = get_next_context(from_context);
 
     if (get_parent(from_context) != MY_CONTEXT) {
-      // switch to parent which is in charge of handling exceptions
       to_context = get_parent(from_context);
 
       timeout = TIMEROFF;
-    } else if (handle_exception(from_context) == EXIT)
-      return get_exit_code(from_context);
+    } else if (handle_exception(from_context) == EXIT) {
+        return get_exit_code(from_context);
+    }
     else {
-      // TODO: scheduler should go here
-      to_context = from_context;
+      if (next_context == (uint64_t*) 0)
+        to_context = used_contexts;
+      else
+        to_context = next_context;
 
       timeout = TIMESLICE;
     }
   }
 }
 
-// Mares
+// mipster for Assignment 3
 uint64_t mipster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts) {
   uint64_t timeout;
   uint64_t* from_context;
@@ -10858,23 +11211,49 @@ uint64_t mipster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_cont
   }
 }
 
+// original hypster
+// uint64_t hypster(uint64_t* to_context) {
+//   uint64_t* from_context;
+
+//   print("hypster\n");
+//   printf1("%s: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n", selfie_name);
+
+//   while (1) {
+//     from_context = hypster_switch(to_context, TIMESLICE);
+
+//     if (handle_exception(from_context) == EXIT)
+//       return get_exit_code(from_context);
+//     else
+//       // TODO: scheduler should go here
+//       to_context = from_context;
+//   }
+// }
+
+// hypster for fork / wait
 uint64_t hypster(uint64_t* to_context) {
   uint64_t* from_context;
+  uint64_t* next_context;
 
   print("hypster\n");
   printf1("%s: >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n", selfie_name);
 
   while (1) {
     from_context = hypster_switch(to_context, TIMESLICE);
+    next_context = get_next_context(from_context);
 
-    if (handle_exception(from_context) == EXIT)
-      return get_exit_code(from_context);
-    else
-      // TODO: scheduler should go here
-      to_context = from_context;
+    if (handle_exception(from_context) == EXIT) {
+        return get_exit_code(from_context);
+    }
+    else {
+      if (next_context  == (uint64_t*)0)
+        to_context = used_contexts;
+      else
+        to_context = next_context;
+    }
   }
 }
 
+// hypster for Assignment 3
 uint64_t hypster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts) {
   uint64_t* from_context;
 
@@ -11113,6 +11492,8 @@ uint64_t selfie_run(uint64_t machine) {
 
   boot_loader(current_context);
 
+  INIT_PROCESS = current_context; // Mares
+
   printf3("%s: selfie executing %s with %uMB physical memory", selfie_name,
     binary_name,
     (char*) (total_page_frame_memory / MEGABYTE));
@@ -11205,7 +11586,7 @@ uint64_t selfie_run_mipster(uint64_t machine) {
   }
 
   // Mares
-   while (context_counter > 0) {
+  while (context_counter > 0) {
 
     current_context = create_context(MY_CONTEXT, 0);
     boot_loader(current_context);
