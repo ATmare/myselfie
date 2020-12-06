@@ -2016,6 +2016,8 @@ uint64_t selfie_run(uint64_t machine);
 
 uint64_t selfie_run_mipster(uint64_t machine);
 
+uint64_t* schedule_next_context(uint64_t* from_context); // Mares
+
 // ------------------------ GLOBAL CONSTANTS -----------------------
 uint64_t* MY_CONTEXT = (uint64_t*) 0;
 uint64_t* INIT_PROCESS = (uint64_t*) 0;
@@ -6709,7 +6711,7 @@ uint64_t* deepcopy_context(uint64_t* parent) {
 
   set_lowest_lo_page(child_context, get_page_of_virtual_address(get_code_seg_start(parent)));
   set_highest_lo_page(child_context, get_page_of_virtual_address(get_program_break(parent)) + 1);
-  set_lowest_hi_page(child_context,  get_page_of_virtual_address(*(get_regs(parent) + REG_SP)) );
+  set_lowest_hi_page(child_context,  get_page_of_virtual_address(*(get_regs(parent) + REG_SP)));
   set_highest_hi_page(child_context, NUMBEROFPAGES);
 
   set_program_break(child_context, get_program_break(parent));
@@ -6808,7 +6810,6 @@ void implement_wait(uint64_t* context) {
     } 
     // if a zombie child was found, delete it
     else {
-      // printf2("I (%d) am waiting. I delete my zombie child: (%d) \n", (char*) context, (char*) get_child_context(zombie));
       zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
       delete_child_from_childlist(zombie_child, context);
       set_process_status(context, READY); 
@@ -11164,10 +11165,7 @@ uint64_t mipster(uint64_t* to_context) {
         return get_exit_code(from_context);
     }
     else {
-      if (next_context == (uint64_t*) 0)
-        to_context = used_contexts;
-      else
-        to_context = next_context;
+      to_context = schedule_next_context(next_context);
 
       timeout = TIMESLICE;
     }
@@ -11246,10 +11244,7 @@ uint64_t hypster(uint64_t* to_context) {
         return get_exit_code(from_context);
     }
     else {
-      if (next_context  == (uint64_t*)0)
-        to_context = used_contexts;
-      else
-        to_context = next_context;
+      to_context = schedule_next_context(next_context);
     }
   }
 }
@@ -11281,6 +11276,35 @@ uint64_t hypster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_cont
         to_context = used_contexts;
     }
   }
+}
+
+// determine next context to be executed
+uint64_t* schedule_next_context(uint64_t* from_context) {
+  uint64_t* next_context;
+
+  next_context = from_context;
+
+  while (next_context != (uint64_t*) 0) {
+    if (get_virtual_context(next_context) == (uint64_t*) 0) {
+      if (get_process_status(next_context) == READY)
+        return next_context;
+    } else
+      next_context = get_next_context(next_context);
+  }
+
+  next_context = used_contexts;
+
+  while (next_context != (uint64_t*) 0) {
+    if (get_virtual_context(next_context) == (uint64_t*) 0) {
+      if (get_process_status(next_context) == READY)
+        return next_context;
+    } else
+      next_context = get_next_context(next_context);
+  }
+
+  next_context = (uint64_t*) 0;
+  return next_context;
+
 }
 
 uint64_t mixter(uint64_t* to_context, uint64_t mix) {
@@ -11494,6 +11518,7 @@ uint64_t selfie_run(uint64_t machine) {
   boot_loader(current_context);
 
   INIT_PROCESS = current_context; // Mares
+  set_process_status(INIT_PROCESS, READY);
 
   printf3("%s: selfie executing %s with %uMB physical memory", selfie_name,
     binary_name,
