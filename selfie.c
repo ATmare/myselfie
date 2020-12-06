@@ -11119,25 +11119,34 @@ uint64_t handle_exception(uint64_t* context) {
 // determine next context to be executed  // (Mares)
 uint64_t* schedule_next_context(uint64_t* from_context) {
   uint64_t* next_context;
+  uint64_t end_of_list_reached;
 
-  next_context = from_context;
+  end_of_list_reached = 0;
 
-  while (next_context != (uint64_t*) 0) {
-    if (get_virtual_context(next_context) == (uint64_t*) 0) {
-      if (get_process_status(next_context) == READY)
-        return next_context;
-    } else
-      next_context = get_next_context(next_context);
+  // if from_context has a successor
+  if (from_context != (uint64_t*) 0) 
+    next_context = from_context;
+  // if from_context has no successor, start at beginning of list
+  else {
+    next_context = used_contexts;
+    end_of_list_reached = 1;
   }
 
-  next_context = used_contexts;
-
   while (next_context != (uint64_t*) 0) {
     if (get_virtual_context(next_context) == (uint64_t*) 0) {
       if (get_process_status(next_context) == READY)
         return next_context;
-    } else
+
+    } else {
       next_context = get_next_context(next_context);
+      // end of list was reached, start at beginning of used_contexts
+      if (next_context == (uint64_t*) 0) {
+        if (end_of_list_reached == 0) {
+          next_context = used_contexts;
+          end_of_list_reached = 1;
+        } 
+      }
+    }
   }
 
   next_context = (uint64_t*) 0;
