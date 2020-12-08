@@ -1111,7 +1111,7 @@ uint64_t DIRFD_AT_FDCWD = -100;
 // ------------------------ GLOBAL VARIABLES -----------------------
 
 uint64_t sc_brk = 0; // syscall counter
-uint64_t old_pid = 0; // used for fork / wait // (Mares)
+uint64_t old_pid = 1; // used for fork / wait // (Mares)
 
 // -----------------------------------------------------------------
 // ------------------------ HYPSTER SYSCALL ------------------------
@@ -1184,7 +1184,7 @@ uint64_t NUMBEROFPAGES = 1048576; // VIRTUALMEMORYSIZE / PAGESIZE
 
 uint64_t NUMBEROFLEAFPTES = 512; // number of leaf page table entries == PAGESIZE / SIZEOFUINT64STAR
 
-uint64_t PAGETABLETREE = 1; // two-level page table is default. 1 means tree.
+uint64_t PAGETABLETREE = 0; // two-level page table is default. 1 means tree.
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
@@ -6704,9 +6704,9 @@ void implement_wait(uint64_t* context) {
   child = get_children(context);
   zombie_child = (uint64_t*) 0;
   
-  // if context has children
+  // if parent context has children
   if (child != (uint64_t*) 0) {
-
+    // look for zombie children
     while (child != (uint64_t*) 0) {
 
       if (get_process_status(get_child_context(child)) == ZOMBIE) {
@@ -6716,21 +6716,17 @@ void implement_wait(uint64_t* context) {
         child = get_next_child_ptr(child);
       }
     }
-    // if context has children, but no zombie children -> block the parent context
+    // if parent context has children, but no zombie children -> block the parent context
     if (zombie_child == (uint64_t*) 0) {
-      if (context == INIT_PROCESS) {
-        set_process_status(context, READY);
-      } else {
-          set_process_status(context, BLOCKED);
-          used_contexts = delete_context_from_list(context, used_contexts);
-          blocked_contexts = add_context_to_list(context, blocked_contexts);
-      }
+      set_process_status(context, BLOCKED);
+      used_contexts = delete_context_from_list(context, used_contexts);
+      blocked_contexts = add_context_to_list(context, blocked_contexts);
     } 
-    // if a zombie child was found, delete it
+    // if a zombie child was found, delete it and set process status of parent to 'READY'
     else {
+      set_process_status(context, READY); 
       zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
       delete_child_from_childlist(zombie_child, context);
-      set_process_status(context, READY); 
     }
   }
 
@@ -7436,7 +7432,7 @@ void copy_page_table(uint64_t* parent_context, uint64_t* child_context, uint64_t
   }
 }
 
-// Deep copy of parent context, returns the copied child context
+// Deep copy of parent context, returns the copied child context // (Mares)
 uint64_t* deepcopy_context(uint64_t* parent) {
   uint64_t* child_context;
   uint64_t i;
@@ -7473,7 +7469,7 @@ uint64_t* deepcopy_context(uint64_t* parent) {
   set_heap_seg_start(child_context, get_heap_seg_start(parent));
 
   set_lowest_lo_page(child_context, get_page_of_virtual_address(get_code_seg_start(parent)));
-  set_highest_lo_page(child_context, get_page_of_virtual_address(get_program_break(parent)) + 1);
+  set_highest_lo_page(child_context, get_page_of_virtual_address(get_program_break(parent)));
   set_lowest_hi_page(child_context,  get_page_of_virtual_address(*(get_regs(parent) + REG_SP)));
   set_highest_hi_page(child_context, NUMBEROFPAGES);
 
@@ -7490,7 +7486,7 @@ uint64_t* deepcopy_context(uint64_t* parent) {
 
   // copy page table
   low = get_page_of_virtual_address(get_code_seg_start(child_context));
-  high = get_page_of_virtual_address(get_program_break(child_context)) + 1;
+  high = get_page_of_virtual_address(get_program_break(child_context) - WORDSIZE) + 1;
   copy_page_table(parent, child_context, low ,high);
   
   low = get_page_of_virtual_address(*(get_regs(parent) + REG_SP));
