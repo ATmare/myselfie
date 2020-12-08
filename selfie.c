@@ -1184,7 +1184,7 @@ uint64_t NUMBEROFPAGES = 1048576; // VIRTUALMEMORYSIZE / PAGESIZE
 
 uint64_t NUMBEROFLEAFPTES = 512; // number of leaf page table entries == PAGESIZE / SIZEOFUINT64STAR
 
-uint64_t PAGETABLETREE = 0; // two-level page table is default. 1 means tree.
+uint64_t PAGETABLETREE = 1; // two-level page table is default. 1 means tree.
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
@@ -6689,10 +6689,18 @@ void emit_wait() {
 
   create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, VOID_T, 0, binary_length);
 
+   // load address of wstatus to a0 register
+  emit_ld(REG_A0, REG_SP, 0);
+
+  // remove wstatus pointer from the stack
+  emit_addi(REG_SP, REG_SP, WORDSIZE);
+
+  // load the correct syscall number and invoke syscall
   emit_addi(REG_A7, REG_ZR, SYSCALL_WAIT);
 
   emit_ecall();
 
+  // jump back to caller
   emit_jalr(REG_ZR, REG_RA, 0);
 
 }
@@ -6700,6 +6708,11 @@ void emit_wait() {
 void implement_wait(uint64_t* context) {
   uint64_t* child;
   uint64_t* zombie_child;
+  uint64_t exit_code;
+  uint64_t wstatus;
+
+  exit_code = 0;
+  wstatus = 0;
 
   child = get_children(context);
   zombie_child = (uint64_t*) 0;
@@ -6727,6 +6740,18 @@ void implement_wait(uint64_t* context) {
       set_process_status(context, READY); 
       zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
       delete_child_from_childlist(zombie_child, context);
+
+      // get exit code of the zombie_child
+      exit_code = get_exit_code(get_child_context(zombie_child));
+      // get least significant bits 0-8 of child's exit code
+      exit_code = sign_shrink(exit_code, 8);
+      // shift zombie_child's exit code to bits 8-15
+      exit_code = left_shift(exit_code, 8);
+      // get the wstatus pointer of the parent context
+      wstatus = *(get_regs(context) + REG_A0);
+      // store the value of the shifted exit code in parent's wstatus pointer
+      map_and_store(context, wstatus, exit_code);
+
     }
   }
 
@@ -11017,6 +11042,13 @@ uint64_t handle_system_call(uint64_t* context) {
 
 // scheduler for fork / wait (Mares)
 uint64_t handle_context_scheduling(uint64_t* context) {
+  uint64_t exit_code;
+  uint64_t wstatus;
+
+  wstatus = 0;
+
+  // get exit code of the context
+  exit_code = get_exit_code(context);
 
   // if from_context that exits has children, INIT_PROCESS adopts the non-zombie children
   if (context != INIT_PROCESS)
@@ -11039,6 +11071,15 @@ uint64_t handle_context_scheduling(uint64_t* context) {
       used_contexts = delete_context(context, used_contexts);
       blocked_contexts = delete_context_from_list(get_parent_fork(context), blocked_contexts);
       used_contexts = add_context_to_list(get_parent_fork(context), used_contexts);
+
+      // get least significant bits 0-8 of child's exit code
+      exit_code = sign_shrink(exit_code, 8);
+      // shift child's exit code to bits 8-15
+      exit_code = left_shift(exit_code, 8);
+      // get the wstatus pointer of the parent
+      wstatus = *(get_regs(get_parent_fork(context)) + REG_A0);
+      // store the value of the shifted exit code in parent's wstatus pointer
+      map_and_store(get_parent_fork(context), wstatus, exit_code); 
     }
 
     return DONOTEXIT;
