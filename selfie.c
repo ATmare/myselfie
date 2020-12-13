@@ -1083,7 +1083,7 @@ void emit_fork();                              // (Mares)
 uint64_t implement_fork(uint64_t* context);    // (Mares) 
 
 void emit_wait();                              // (Mares)
-void implement_wait(uint64_t* context);        // (Mares)
+uint64_t implement_wait(uint64_t* context);    // (Mares)
 
 uint64_t is_boot_level_zero();
 
@@ -1110,7 +1110,7 @@ uint64_t DIRFD_AT_FDCWD = -100;
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
-uint64_t sc_brk = 0; // syscall counter
+uint64_t sc_brk  = 0;  // syscall counter
 uint64_t old_pid = 1; // used for fork / wait // (Mares)
 
 // -----------------------------------------------------------------
@@ -1827,7 +1827,7 @@ uint64_t* get_next_child_ptr(uint64_t* child_entry)       { return (uint64_t*) *
 uint64_t* get_prev_child_ptr(uint64_t* child_entry)       { return (uint64_t*) *(child_entry + 2); }
 
 uint64_t* allocate_context() {
-  return smalloc(11 * SIZEOFUINT64STAR + 15 * SIZEOFUINT64);
+  return smalloc(11 * SIZEOFUINT64STAR + 16 * SIZEOFUINT64);
 }
 
 uint64_t next_context(uint64_t* context)    { return (uint64_t) context; }
@@ -1858,6 +1858,7 @@ uint64_t use_gc_kernel(uint64_t* context)    { return (uint64_t) (context + 22);
 uint64_t children(uint64_t* context)         { return (uint64_t) (context + 23); }    // (Mares)
 uint64_t parent_fork(uint64_t* context)      { return (uint64_t) (context + 24); }    // (Mares)
 uint64_t process_status(uint64_t* context)   { return (uint64_t) (context + 25); }    // (Mares)
+uint64_t pid(uint64_t* context)              { return (uint64_t) (context + 26); }    // (Mares)
 
 uint64_t* get_next_context(uint64_t* context)    { return (uint64_t*) *context; }
 uint64_t* get_prev_context(uint64_t* context)    { return (uint64_t*) *(context + 1); }
@@ -1887,6 +1888,7 @@ uint64_t  get_use_gc_kernel(uint64_t* context)    { return             *(context
 uint64_t*  get_children(uint64_t* context)        { return (uint64_t*) *(context + 23); }    // (Mares)
 uint64_t*  get_parent_fork(uint64_t* context)     { return (uint64_t*) *(context + 24); }    // (Mares)
 uint64_t   get_process_status(uint64_t* context)  { return             *(context + 25); }    // (Mares)
+uint64_t   get_pid(uint64_t* context)             { return             *(context + 26); }    // (Mares)
 
 void set_next_context(uint64_t* context, uint64_t* next)      { *context        = (uint64_t) next; }
 void set_prev_context(uint64_t* context, uint64_t* prev)      { *(context + 1)  = (uint64_t) prev; }
@@ -1916,6 +1918,7 @@ void set_use_gc_kernel(uint64_t* context, uint64_t use)              { *(context
 void set_children(uint64_t* context, uint64_t* child)                { *(context + 23) = (uint64_t) child; }     // (Mares)
 void set_parent_fork(uint64_t* context, uint64_t* parent)            { *(context + 24) = (uint64_t) parent;}     // (Mares)
 void set_process_status(uint64_t* context, uint64_t status)          { *(context + 25) = status; }  // 0 = ready, 1 = blocked, 2 = running, 3 = zombie
+void set_pid(uint64_t* context, uint64_t pid)                        { *(context + 26) = pid; } 
 
 // -----------------------------------------------------------------
 // -------------------------- MICROKERNEL --------------------------
@@ -6674,11 +6677,13 @@ uint64_t implement_fork(uint64_t* context) {
 
   child_context = deepcopy_context(context);
 
-  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
-  set_pc(child_context, get_pc(child_context) + INSTRUCTIONSIZE);
-
   *(get_regs(context) + REG_A0) = new_pid;
   *(get_regs(child_context) + REG_A0) = 0;
+
+  set_pid(child_context, new_pid);
+
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+  set_pc(child_context, get_pc(child_context) + INSTRUCTIONSIZE);
 
   old_pid = new_pid;
 
@@ -6687,7 +6692,7 @@ uint64_t implement_fork(uint64_t* context) {
 
 void emit_wait() {
 
-  create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, VOID_T, 0, binary_length);
+  create_symbol_table_entry(LIBRARY_TABLE, "wait", 0, PROCEDURE, UINT64_T, 0, binary_length);
 
    // load address of wstatus to a0 register
   emit_ld(REG_A0, REG_SP, 0);
@@ -6705,17 +6710,27 @@ void emit_wait() {
 
 }
 
-void implement_wait(uint64_t* context) {
+uint64_t implement_wait(uint64_t* context) {
   uint64_t* child;
   uint64_t* zombie_child;
   uint64_t exit_code;
   uint64_t wstatus;
+
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
 
   exit_code = 0;
   wstatus = 0;
 
   child = get_children(context);
   zombie_child = (uint64_t*) 0;
+
+  if (*(get_regs(context) + REG_A0) != 0) {
+    if (is_valid_data_stack_heap_address(context, *(get_regs(context) + REG_A0)) == 0) {
+      exit_code = -1;
+      *(get_regs(context) + REG_A0) = exit_code;
+      return exit_code;
+    }  
+  }
   
   // if parent context has children
   if (child != (uint64_t*) 0) {
@@ -6734,6 +6749,9 @@ void implement_wait(uint64_t* context) {
       set_process_status(context, BLOCKED);
       used_contexts = delete_context_from_list(context, used_contexts);
       blocked_contexts = add_context_to_list(context, blocked_contexts);
+
+      return 0;
+
     } 
     // if a zombie child was found, delete it and set process status of parent to 'READY'
     else {
@@ -6741,21 +6759,34 @@ void implement_wait(uint64_t* context) {
       zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
       delete_child_from_childlist(zombie_child, context);
 
-      // get exit code of the zombie_child
-      exit_code = get_exit_code(get_child_context(zombie_child));
-      // get least significant bits 0-8 of child's exit code
-      exit_code = sign_shrink(exit_code, 8);
-      // shift zombie_child's exit code to bits 8-15
-      exit_code = left_shift(exit_code, 8);
-      // get the wstatus pointer of the parent context
-      wstatus = *(get_regs(context) + REG_A0);
-      // store the value of the shifted exit code in parent's wstatus pointer
-      map_and_store(context, wstatus, exit_code);
+      if (*(get_regs(context) + REG_A0) != 0) {
 
+        // get exit code of the zombie_child
+        exit_code = get_exit_code(get_child_context(zombie_child));
+        // get least significant bits 0-8 of child's exit code
+        exit_code = sign_shrink(exit_code, 8);
+        // shift zombie_child's exit code to bits 8-15
+        exit_code = left_shift(exit_code, 8);
+        // get the wstatus pointer of the parent context
+        wstatus = *(get_regs(context) + REG_A0);
+
+        // store the value of the shifted exit code in parent's wstatus pointer
+        map_and_store(context, wstatus, exit_code);
+
+      }
+      
+      *(get_regs(context) + REG_A0) = get_pid(get_child_context(zombie_child));
+
+      return get_pid(get_child_context(zombie_child));
+      
     }
+  // if parent context has no children
+  } else {
+    exit_code = -1;
+    *(get_regs(context) + REG_A0) = exit_code;
+    return exit_code;
   }
-
-  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+  
 }
 
 
@@ -11072,14 +11103,17 @@ uint64_t handle_context_scheduling(uint64_t* context) {
       blocked_contexts = delete_context_from_list(get_parent_fork(context), blocked_contexts);
       used_contexts = add_context_to_list(get_parent_fork(context), used_contexts);
 
-      // get least significant bits 0-8 of child's exit code
-      exit_code = sign_shrink(exit_code, 8);
-      // shift child's exit code to bits 8-15
-      exit_code = left_shift(exit_code, 8);
-      // get the wstatus pointer of the parent
-      wstatus = *(get_regs(get_parent_fork(context)) + REG_A0);
-      // store the value of the shifted exit code in parent's wstatus pointer
-      map_and_store(get_parent_fork(context), wstatus, exit_code); 
+      if (*(get_regs(get_parent_fork(context)) + REG_A0) != 0) {
+        // get least significant bits 0-8 of child's exit code
+        exit_code = sign_shrink(exit_code, 8);
+        // shift child's exit code to bits 8-15
+        exit_code = left_shift(exit_code, 8);
+        // get the wstatus pointer of the parent
+        wstatus = *(get_regs(get_parent_fork(context)) + REG_A0);
+        // store the value of the shifted exit code in parent's wstatus pointer
+        map_and_store(get_parent_fork(context), wstatus, exit_code); 
+      }
+      
     }
 
     return DONOTEXIT;
@@ -11567,6 +11601,7 @@ uint64_t selfie_run(uint64_t machine) {
 
   INIT_PROCESS = current_context;            // (Mares)
   set_process_status(INIT_PROCESS, READY);   // (Mares)
+  set_pid(INIT_PROCESS, old_pid);            // (Mares)
 
   printf3("%s: selfie executing %s with %uMB physical memory", selfie_name,
     binary_name,
