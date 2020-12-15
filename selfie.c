@@ -1083,7 +1083,7 @@ void emit_fork();                              // (Mares)
 uint64_t implement_fork(uint64_t* context);    // (Mares) 
 
 void emit_wait();                              // (Mares)
-uint64_t implement_wait(uint64_t* context);    // (Mares)
+void implement_wait(uint64_t* context);    // (Mares)
 
 uint64_t is_boot_level_zero();
 
@@ -6710,7 +6710,7 @@ void emit_wait() {
 
 }
 
-uint64_t implement_wait(uint64_t* context) {
+void implement_wait(uint64_t* context) {
   uint64_t* child;
   uint64_t* zombie_child;
   uint64_t exit_code;
@@ -6728,8 +6728,8 @@ uint64_t implement_wait(uint64_t* context) {
     if (is_valid_data_stack_heap_address(context, *(get_regs(context) + REG_A0)) == 0) {
       exit_code = -1;
       *(get_regs(context) + REG_A0) = exit_code;
-      return exit_code;
-    }  
+      return;
+    }
   }
   
   // if parent context has children
@@ -6750,8 +6750,6 @@ uint64_t implement_wait(uint64_t* context) {
       used_contexts = delete_context_from_list(context, used_contexts);
       blocked_contexts = add_context_to_list(context, blocked_contexts);
 
-      return 0;
-
     } 
     // if a zombie child was found, delete it and set process status of parent to 'READY'
     else {
@@ -6759,6 +6757,7 @@ uint64_t implement_wait(uint64_t* context) {
       zombie_contexts = delete_context_from_list(get_child_context(zombie_child), zombie_contexts);
       delete_child_from_childlist(zombie_child, context);
 
+      // if wstatus pointer is not null
       if (*(get_regs(context) + REG_A0) != 0) {
 
         // get exit code of the zombie_child
@@ -6776,15 +6775,12 @@ uint64_t implement_wait(uint64_t* context) {
       }
       
       *(get_regs(context) + REG_A0) = get_pid(get_child_context(zombie_child));
-
-      return get_pid(get_child_context(zombie_child));
       
     }
   // if parent context has no children
   } else {
     exit_code = -1;
     *(get_regs(context) + REG_A0) = exit_code;
-    return exit_code;
   }
   
 }
@@ -11113,6 +11109,8 @@ uint64_t handle_context_scheduling(uint64_t* context) {
         // store the value of the shifted exit code in parent's wstatus pointer
         map_and_store(get_parent_fork(context), wstatus, exit_code); 
       }
+
+      *(get_regs(get_parent_fork(context)) + REG_A0) = get_pid(context);
       
     }
 
