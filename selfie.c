@@ -6673,6 +6673,7 @@ void selfie_load() {
 // ----------------------- MIPSTER SYSCALLS ------------------------
 // -----------------------------------------------------------------
 
+// (Mares)
 void emit_lock() {
   create_symbol_table_entry(LIBRARY_TABLE, "lock", 0, PROCEDURE, VOID_T, 0, binary_length);
 
@@ -6683,13 +6684,12 @@ void emit_lock() {
   emit_jalr(REG_ZR, REG_RA, 0);
 }
 
-// TODO: process is not allowed to set itself on locked.  
+// (Mares) 
 void implement_lock(uint64_t* context) { 
 
   // if no one is lock owner at the moment, make context lockowner
   if (lockowner == (uint64_t*) 0) {
     lockowner = context;
-    // printf1("i am lock owner%d \n", (char*) context);
 
   } else {
     used_contexts = delete_context_from_list(context, used_contexts);
@@ -6703,6 +6703,7 @@ void implement_lock(uint64_t* context) {
   
 }
 
+// (Mares)
 void emit_unlock() {
   create_symbol_table_entry(LIBRARY_TABLE, "unlock", 0, PROCEDURE, VOID_T, 0, binary_length);
 
@@ -6713,17 +6714,19 @@ void emit_unlock() {
   emit_jalr(REG_ZR, REG_RA, 0);
 }
 
-// TODO: process is not allowed to set itself on unlocked? or is it?
+// (Mares)
 void implement_unlock(uint64_t* context) {
   uint64_t* lock_context;
 
-  lockowner = (uint64_t*) 0;
+  if (lockowner == context) {
+    lockowner = (uint64_t*) 0;
 
-  lock_context = search_for_locked_context();
-  if (lock_context != (uint64_t*) 0) {
-    set_process_status(lock_context, READY);
-    used_contexts = add_context_to_list(lock_context, used_contexts);
-    blocked_contexts = delete_context_from_list(lock_context, blocked_contexts);
+    lock_context = search_for_locked_context();
+    if (lock_context != (uint64_t*) 0) {
+      set_process_status(lock_context, READY);
+      blocked_contexts = delete_context_from_list(lock_context, blocked_contexts);
+      used_contexts = add_context_to_list(lock_context, used_contexts);
+    }
   }
 
   set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
@@ -11369,8 +11372,6 @@ uint64_t mipster(uint64_t* to_context) {
   while (1) {
     from_context = mipster_switch(to_context, timeout);
     next_context = get_next_context(from_context);
-    // printf1("i am next_context: %d\n", (char*) next_context);
-    // print_list(used_contexts);
 
     if (get_parent(from_context) != MY_CONTEXT) {
       to_context = get_parent(from_context);
