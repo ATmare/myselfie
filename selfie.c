@@ -1985,6 +1985,12 @@ void reset_microkernel() {
 
   while (used_contexts != (uint64_t*) 0)
     used_contexts = delete_context(used_contexts, used_contexts);
+
+  while (blocked_contexts != (uint64_t*) 0)
+    blocked_contexts = delete_context(blocked_contexts, blocked_contexts);
+
+  while (blocked_contexts != (uint64_t*) 0)
+    zombie_contexts = delete_context(zombie_contexts, zombie_contexts);
 }
 
 // -----------------------------------------------------------------
@@ -2019,7 +2025,7 @@ uint64_t hypster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_cont
 uint64_t mipster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts);  // (Mares)
 
 uint64_t* schedule_next_context(uint64_t* from_context);  // (Mares)
-uint64_t*  search_for_locked_context(); // (Mares)
+uint64_t* search_for_locked_context(); // (Mares)
 
 uint64_t mixter(uint64_t* to_context, uint64_t mix);
 
@@ -6693,9 +6699,10 @@ void implement_lock(uint64_t* context) {
 
   } else {
     used_contexts = delete_context_from_list(context, used_contexts);
+    // set process status to 'LOCK', which indicates that the context is waiting to be lockowner
     blocked_contexts = add_context_to_list(context, blocked_contexts);
     set_process_status(context, LOCK);
-    // do not set PC + 8, so that the lock syscall can be made again
+    // do not set PC + 8, so that the lock syscall can be called again
     set_pc(context, get_pc(context) - INSTRUCTIONSIZE);
   }
 
@@ -11154,6 +11161,11 @@ uint64_t handle_context_scheduling(uint64_t* context) {
   // get exit code of the context
   exit_code = get_exit_code(context);
 
+  // for Assignment 6 - release lock if context exits
+  if (lockowner == context) {
+    lockowner = (uint64_t*) 0;
+  }
+
   // if from_context that exits has children, INIT_PROCESS adopts the non-zombie children
   if (context != INIT_PROCESS)
     adopt_children(context);
@@ -11189,11 +11201,6 @@ uint64_t handle_context_scheduling(uint64_t* context) {
 
       *(get_regs(get_parent_fork(context)) + REG_A0) = get_pid(context);
       
-    }
-
-    // for Assignment 6 lock (Mares)
-    if (lockowner == context) {
-      lockowner = (uint64_t*) 0;
     }
 
     return DONOTEXIT;
@@ -11321,7 +11328,6 @@ uint64_t* search_for_locked_context() {
       if (get_process_status(next_context) == LOCK) {
         lock_context = next_context;
       }
-
     } 
     next_context = get_next_context(next_context);
   }
@@ -11377,9 +11383,8 @@ uint64_t mipster(uint64_t* to_context) {
       to_context = get_parent(from_context);
 
       timeout = TIMEROFF;
-    } else if (handle_exception(from_context) == EXIT) {
-        return get_exit_code(from_context);
-    }
+    } else if (handle_exception(from_context) == EXIT)
+      return get_exit_code(from_context);
     else {
       to_context = schedule_next_context(next_context);
 
