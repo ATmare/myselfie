@@ -11279,9 +11279,6 @@ uint64_t* schedule_next_context(uint64_t* from_context) {
   uint64_t* next_context;
   uint64_t end_of_list_reached;
 
-  if (lockowner != (uint64_t*) 0)
-    return lockowner;
-
   end_of_list_reached = 0;
 
   // if from_context has a successor
