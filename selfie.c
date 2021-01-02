@@ -1083,7 +1083,13 @@ void emit_fork();                              // (Mares)
 uint64_t implement_fork(uint64_t* context);    // (Mares) 
 
 void emit_wait();                              // (Mares)
-void implement_wait(uint64_t* context);    // (Mares)
+void implement_wait(uint64_t* context);        // (Mares)
+
+void emit_lock();                              // (Mares)
+void implement_lock(uint64_t* context);        // (Mares)
+
+void emit_unlock();                              // (Mares)
+void implement_unlock(uint64_t* context);        // (Mares)
 
 uint64_t is_boot_level_zero();
 
@@ -1099,8 +1105,10 @@ uint64_t SYSCALL_READ   = 63;
 uint64_t SYSCALL_WRITE  = 64;
 uint64_t SYSCALL_OPENAT = 56;
 uint64_t SYSCALL_BRK    = 214;
-uint64_t SYSCALL_WAIT   = 404; // (Mares)
 uint64_t SYSCALL_FORK   = 402; // (Mares)
+uint64_t SYSCALL_WAIT   = 404; // (Mares)
+uint64_t SYSCALL_LOCK   = 405; // (Mares)
+uint64_t SYSCALL_UNLOCK = 406; // (Mares)
 
 /* DIRFD_AT_FDCWD corresponds to AT_FDCWD in fcntl.h and
    is passed as first argument of the openat system call
@@ -1129,6 +1137,8 @@ uint64_t* hypster_switch(uint64_t* to_context, uint64_t timeout);
 uint64_t SYSCALL_SWITCH = 401;
 
 uint64_t debug_switch = 0;
+
+uint64_t* lockowner = (uint64_t*) 0; // (Mares)
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
 // -----------------------------------------------------------------
@@ -1952,10 +1962,11 @@ uint64_t is_valid_segment_write(uint64_t vaddr);
 uint64_t debug_create = 0;
 uint64_t debug_map    = 0;
 
-uint64_t READY = 0;     // (Mares)
+uint64_t READY   = 0;   // (Mares)
 uint64_t BLOCKED = 1;   // (Mares)
 uint64_t RUNNING = 2;   // (Mares)
-uint64_t ZOMBIE = 3;    // (Mares)
+uint64_t ZOMBIE  = 3;   // (Mares)
+uint64_t LOCK    = 4;   // (Mares)
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
@@ -1974,6 +1985,12 @@ void reset_microkernel() {
 
   while (used_contexts != (uint64_t*) 0)
     used_contexts = delete_context(used_contexts, used_contexts);
+
+  while (blocked_contexts != (uint64_t*) 0)
+    blocked_contexts = delete_context(blocked_contexts, blocked_contexts);
+
+  while (blocked_contexts != (uint64_t*) 0)
+    zombie_contexts = delete_context(zombie_contexts, zombie_contexts);
 }
 
 // -----------------------------------------------------------------
@@ -2008,6 +2025,7 @@ uint64_t hypster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_cont
 uint64_t mipster_multiple_contexts(uint64_t* to_context, uint64_t amount_of_contexts);  // (Mares)
 
 uint64_t* schedule_next_context(uint64_t* from_context);  // (Mares)
+uint64_t* search_for_locked_context(); // (Mares)
 
 uint64_t mixter(uint64_t* to_context, uint64_t mix);
 
@@ -5597,6 +5615,8 @@ void selfie_compile() {
 
   emit_fork();      // (Mares)
   emit_wait();
+  emit_lock();
+  emit_unlock();
 
   if (GC_ON) {
     emit_fetch_stack_pointer();
@@ -6658,6 +6678,66 @@ void selfie_load() {
 // -----------------------------------------------------------------
 // ----------------------- MIPSTER SYSCALLS ------------------------
 // -----------------------------------------------------------------
+
+// (Mares)
+void emit_lock() {
+  create_symbol_table_entry(LIBRARY_TABLE, "lock", 0, PROCEDURE, VOID_T, 0, binary_length);
+
+  emit_addi(REG_A7, REG_ZR, SYSCALL_LOCK);
+
+  emit_ecall();
+
+  emit_jalr(REG_ZR, REG_RA, 0);
+}
+
+// (Mares) 
+void implement_lock(uint64_t* context) { 
+
+  // if no one is lock owner at the moment, make context lockowner
+  if (lockowner == (uint64_t*) 0) {
+    lockowner = context;
+
+  } else {
+    used_contexts = delete_context_from_list(context, used_contexts);
+    // set process status to 'LOCK', which indicates that the context is waiting to be lockowner
+    blocked_contexts = add_context_to_list(context, blocked_contexts);
+    set_process_status(context, LOCK);
+    // do not set PC + 8, so that the lock syscall can be called again
+    set_pc(context, get_pc(context) - INSTRUCTIONSIZE);
+  }
+
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+  
+}
+
+// (Mares)
+void emit_unlock() {
+  create_symbol_table_entry(LIBRARY_TABLE, "unlock", 0, PROCEDURE, VOID_T, 0, binary_length);
+
+  emit_addi(REG_A7, REG_ZR, SYSCALL_UNLOCK);
+
+  emit_ecall();
+
+  emit_jalr(REG_ZR, REG_RA, 0);
+}
+
+// (Mares)
+void implement_unlock(uint64_t* context) {
+  uint64_t* lock_context;
+
+  if (lockowner == context) {
+    lockowner = (uint64_t*) 0;
+
+    lock_context = search_for_locked_context();
+    if (lock_context != (uint64_t*) 0) {
+      set_process_status(lock_context, READY);
+      blocked_contexts = delete_context_from_list(lock_context, blocked_contexts);
+      used_contexts = add_context_to_list(lock_context, used_contexts);
+    }
+  }
+
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+}
 
 void emit_fork() {
   create_symbol_table_entry(LIBRARY_TABLE, "fork", 0, PROCEDURE, UINT64_T, 0, binary_length);
@@ -11050,6 +11130,10 @@ uint64_t handle_system_call(uint64_t* context) {
     implement_fork(context);
   else if (a7 == SYSCALL_WAIT)
     implement_wait(context);
+  else if (a7 == SYSCALL_LOCK)
+    implement_lock(context);
+  else if (a7 == SYSCALL_UNLOCK)
+    implement_unlock(context);
   else if (a7 == SYSCALL_EXIT) {
     implement_exit(context);
 
@@ -11076,6 +11160,11 @@ uint64_t handle_context_scheduling(uint64_t* context) {
 
   // get exit code of the context
   exit_code = get_exit_code(context);
+
+  // for Assignment 6 - release lock if context exits
+  if (lockowner == context) {
+    lockowner = (uint64_t*) 0;
+  }
 
   // if from_context that exits has children, INIT_PROCESS adopts the non-zombie children
   if (context != INIT_PROCESS)
@@ -11223,6 +11312,26 @@ uint64_t* schedule_next_context(uint64_t* from_context) {
 
 }
 
+// determine next context to be executed  // (Mares)
+uint64_t* search_for_locked_context() {
+  uint64_t* next_context;
+  uint64_t* lock_context;
+
+  lock_context = (uint64_t*) 0;
+  next_context = blocked_contexts;
+
+  while (next_context != (uint64_t*) 0) {
+    if (get_virtual_context(next_context) == (uint64_t*) 0) {
+      if (get_process_status(next_context) == LOCK) {
+        lock_context = next_context;
+      }
+    } 
+    next_context = get_next_context(next_context);
+  }
+
+  return lock_context;
+}
+
 // original mipster
 // uint64_t mipster(uint64_t* to_context) {
 //   uint64_t timeout;
@@ -11271,9 +11380,8 @@ uint64_t mipster(uint64_t* to_context) {
       to_context = get_parent(from_context);
 
       timeout = TIMEROFF;
-    } else if (handle_exception(from_context) == EXIT) {
-        return get_exit_code(from_context);
-    }
+    } else if (handle_exception(from_context) == EXIT)
+      return get_exit_code(from_context);
     else {
       to_context = schedule_next_context(next_context);
 
