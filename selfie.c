@@ -11413,16 +11413,25 @@ uint64_t handle_context_scheduling(uint64_t* context) {
 
 uint64_t handle_page_fault(uint64_t* context) {
   uint64_t page;
+  uint64_t frame;
+  uint64_t* thread;
 
   set_exception(context, EXCEPTION_NOEXCEPTION);
 
   page = get_fault(context);
 
   // TODO: reuse frames
-  map_page(context, page, (uint64_t) palloc());
+  frame = (uint64_t) palloc();
+  map_page(context, page, frame);
 
   if (is_valid_heap_address(context, get_virtual_address_of_page_start(page)))
     mc_mapped_heap = mc_mapped_heap + PAGESIZE;
+
+  thread = thread_contexts;
+  while (thread != (uint64_t*)0) {
+    map_page(get_child_context(thread), page, frame);
+    thread = get_next_child_ptr(thread);
+  }
 
   return DONOTEXIT;
 }
@@ -11576,9 +11585,6 @@ uint64_t mipster(uint64_t* to_context) {
   while (1) {
     from_context = mipster_switch(to_context, timeout);
     next_context = get_next_context(from_context);
-
-    // if (used_contexts != (uint64_t*)0)
-    // print_list(zombie_contexts);
 
     if (get_parent(from_context) != MY_CONTEXT) {
       to_context = get_parent(from_context);
