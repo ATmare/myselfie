@@ -1088,8 +1088,17 @@ void implement_wait(uint64_t* context);        // (Mares)
 void emit_lock();                              // (Mares)
 void implement_lock(uint64_t* context);        // (Mares)
 
-void emit_unlock();                              // (Mares)
-void implement_unlock(uint64_t* context);        // (Mares)
+void emit_unlock();                            // (Mares)
+void implement_unlock(uint64_t* context);      // (Mares)
+
+void emit_pthread_create();                    // (Mares) 
+void implement_pthread_create(uint64_t* context); 
+
+void emit_pthread_join();                      // (Mares)
+void implement_pthread_join(uint64_t* context); 
+
+void emit_pthread_exit();                      // (Mares)
+void implement_pthread_exit(uint64_t* context); 
 
 uint64_t is_boot_level_zero();
 
@@ -1109,6 +1118,9 @@ uint64_t SYSCALL_FORK   = 402; // (Mares)
 uint64_t SYSCALL_WAIT   = 404; // (Mares)
 uint64_t SYSCALL_LOCK   = 405; // (Mares)
 uint64_t SYSCALL_UNLOCK = 406; // (Mares)
+uint64_t SYSCALL_PTHREADCREATE  = 407; // (Mares)
+uint64_t SYSCALL_PTHREADJOIN    = 408; // (Mares)
+uint64_t SYSCALL_PTHREADEXIT    = 409; // (Mares)
 
 /* DIRFD_AT_FDCWD corresponds to AT_FDCWD in fcntl.h and
    is passed as first argument of the openat system call
@@ -1177,8 +1189,9 @@ uint64_t* tlb(uint64_t* table, uint64_t vaddr);
 uint64_t load_virtual_memory(uint64_t* table, uint64_t vaddr);
 void     store_virtual_memory(uint64_t* table, uint64_t vaddr, uint64_t data);
 
-uint64_t* deepcopy_context(uint64_t* parent);  // (Mares)
+uint64_t* deepcopy_context(uint64_t* parent, uint64_t process_type);  // (Mares)
 void copy_page_table(uint64_t* parent_context, uint64_t* child_context, uint64_t low, uint64_t high); // (Mares)
+void share_pages_pthread(uint64_t* parent_context, uint64_t* child_context, uint64_t low, uint64_t high);
 
 // ------------------------ GLOBAL CONSTANTS -----------------------
 
@@ -1781,6 +1794,7 @@ uint64_t* add_context_to_list(uint64_t* context, uint64_t* list);               
 void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context);   // (Mares)
 void adopt_children(uint64_t* context);                                           // (Mares)
 void delete_child_from_childlist(uint64_t* child, uint64_t* parent);              // (Mares)
+void add_thread_to_threadlist(uint64_t* context);
 
 // print methods used for debugging
 void print_context_variables(uint64_t* context);    // (Mares)
@@ -1815,9 +1829,11 @@ void print_list(uint64_t* list);                    // (Mares)
 // | 21 | gcs counter     | number of gc runs in gc period
 // | 22 | gc enabled      | flag indicating whether to use gc or not
 // +----+-----------------+
-// | 23 | children        | children created by fork()
-// | 24 | parent_fork     | parent process created by fork()
-// | 25 | process status  | Process status can be READY, ZOMBIE, RUNNING, BLOCKED
+// | 23 | children        | children list that contains contexts created by fork() or pthread_create()
+// | 24 | parent process  | parent process that created the current proccess by fork() or pthread_create()
+// | 25 | process status  | Process status can be READY, ZOMBIE, RUNNING, BLOCKED, LOCK
+// | 26 | pid             | pid of the context
+// | 27 | process_type    | process_type of a context can be FORK or THREAD
 // +----+-----------------+
 
 
@@ -1837,7 +1853,7 @@ uint64_t* get_next_child_ptr(uint64_t* child_entry)       { return (uint64_t*) *
 uint64_t* get_prev_child_ptr(uint64_t* child_entry)       { return (uint64_t*) *(child_entry + 2); }
 
 uint64_t* allocate_context() {
-  return smalloc(11 * SIZEOFUINT64STAR + 16 * SIZEOFUINT64);
+  return smalloc(11 * SIZEOFUINT64STAR + 17 * SIZEOFUINT64);
 }
 
 uint64_t next_context(uint64_t* context)    { return (uint64_t) context; }
@@ -1866,9 +1882,10 @@ uint64_t gcs_in_period(uint64_t* context)    { return (uint64_t) (context + 21);
 uint64_t use_gc_kernel(uint64_t* context)    { return (uint64_t) (context + 22); }
 
 uint64_t children(uint64_t* context)         { return (uint64_t) (context + 23); }    // (Mares)
-uint64_t parent_fork(uint64_t* context)      { return (uint64_t) (context + 24); }    // (Mares)
+uint64_t parent_process(uint64_t* context)   { return (uint64_t) (context + 24); }    // (Mares)
 uint64_t process_status(uint64_t* context)   { return (uint64_t) (context + 25); }    // (Mares)
 uint64_t pid(uint64_t* context)              { return (uint64_t) (context + 26); }    // (Mares)
+uint64_t process_type(uint64_t* context)     { return (uint64_t) (context + 27); }    // (Mares)
 
 uint64_t* get_next_context(uint64_t* context)    { return (uint64_t*) *context; }
 uint64_t* get_prev_context(uint64_t* context)    { return (uint64_t*) *(context + 1); }
@@ -1896,9 +1913,10 @@ uint64_t  get_gcs_in_period(uint64_t* context)    { return             *(context
 uint64_t  get_use_gc_kernel(uint64_t* context)    { return             *(context + 22); }
 
 uint64_t*  get_children(uint64_t* context)        { return (uint64_t*) *(context + 23); }    // (Mares)
-uint64_t*  get_parent_fork(uint64_t* context)     { return (uint64_t*) *(context + 24); }    // (Mares)
+uint64_t*  get_parent_process(uint64_t* context)  { return (uint64_t*) *(context + 24); }    // (Mares)
 uint64_t   get_process_status(uint64_t* context)  { return             *(context + 25); }    // (Mares)
 uint64_t   get_pid(uint64_t* context)             { return             *(context + 26); }    // (Mares)
+uint64_t   get_process_type(uint64_t* context)    { return             *(context + 27); }    // (Mares)
 
 void set_next_context(uint64_t* context, uint64_t* next)      { *context        = (uint64_t) next; }
 void set_prev_context(uint64_t* context, uint64_t* prev)      { *(context + 1)  = (uint64_t) prev; }
@@ -1926,9 +1944,10 @@ void set_gcs_in_period(uint64_t* context, uint64_t gcs)              { *(context
 void set_use_gc_kernel(uint64_t* context, uint64_t use)              { *(context + 22) = use; }
 
 void set_children(uint64_t* context, uint64_t* child)                { *(context + 23) = (uint64_t) child; }     // (Mares)
-void set_parent_fork(uint64_t* context, uint64_t* parent)            { *(context + 24) = (uint64_t) parent;}     // (Mares)
-void set_process_status(uint64_t* context, uint64_t status)          { *(context + 25) = status; }  // 0 = ready, 1 = blocked, 2 = running, 3 = zombie
+void set_parent_process(uint64_t* context, uint64_t* parent)         { *(context + 24) = (uint64_t) parent;}     // (Mares)
+void set_process_status(uint64_t* context, uint64_t status)          { *(context + 25) = status; }  // 0 = ready, 1 = blocked, 2 = running, 3 = zombie, 4 = lock
 void set_pid(uint64_t* context, uint64_t pid)                        { *(context + 26) = pid; } 
+void set_process_type(uint64_t* context, uint64_t type)              { *(context + 27) = type; } // 0 = fork, 1 = thread
 
 // -----------------------------------------------------------------
 // -------------------------- MICROKERNEL --------------------------
@@ -1968,6 +1987,9 @@ uint64_t RUNNING = 2;   // (Mares)
 uint64_t ZOMBIE  = 3;   // (Mares)
 uint64_t LOCK    = 4;   // (Mares)
 
+uint64_t FORK    = 0;   // (Mares)
+uint64_t THREAD  = 1;   // (Mares)
+
 // ------------------------ GLOBAL VARIABLES -----------------------
 
 uint64_t* current_context = (uint64_t*) 0; // context currently running
@@ -1975,8 +1997,9 @@ uint64_t* current_context = (uint64_t*) 0; // context currently running
 uint64_t* used_contexts = (uint64_t*) 0; // doubly-linked list of used contexts
 uint64_t* free_contexts = (uint64_t*) 0; // singly-linked list of free contexts
 
-uint64_t* zombie_contexts = (uint64_t*) 0;  // List contains contexts with process_status == ZOMBIE // (Mares)
+uint64_t* zombie_contexts  = (uint64_t*) 0; // List contains contexts with process_status == ZOMBIE // (Mares)
 uint64_t* blocked_contexts = (uint64_t*) 0; // List contains contexts with process_status == BLOCKED // (Mares)
+uint64_t* thread_contexts  = (uint64_t*) 0; // List contains all threads
 
 // ------------------------- INITIALIZATION ------------------------
 
@@ -1991,6 +2014,9 @@ void reset_microkernel() {
 
   while (blocked_contexts != (uint64_t*) 0)
     zombie_contexts = delete_context(zombie_contexts, zombie_contexts);
+
+  while (thread_contexts != (uint64_t*) 0)
+    thread_contexts = delete_context(thread_contexts, thread_contexts);
 }
 
 // -----------------------------------------------------------------
@@ -5618,6 +5644,10 @@ void selfie_compile() {
   emit_lock();
   emit_unlock();
 
+  emit_pthread_create();
+  emit_pthread_join();
+  emit_pthread_exit();
+
   if (GC_ON) {
     emit_fetch_stack_pointer();
     emit_fetch_global_pointer();
@@ -6739,6 +6769,91 @@ void implement_unlock(uint64_t* context) {
   set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
 }
 
+
+void emit_pthread_create() {
+  create_symbol_table_entry(LIBRARY_TABLE, "pthread_create", 0, PROCEDURE, UINT64_T, 0, binary_length);
+
+  emit_addi(REG_A7, REG_ZR, SYSCALL_PTHREADCREATE);
+
+  emit_ecall();
+
+  emit_jalr(REG_ZR, REG_RA, 0);
+
+}
+
+void implement_pthread_create(uint64_t* context) {
+
+  uint64_t new_pid;
+  uint64_t* child_context;
+
+  new_pid = old_pid + 1;
+
+  child_context = deepcopy_context(context, THREAD);
+
+  *(get_regs(context) + REG_A0) = new_pid;
+  *(get_regs(child_context) + REG_A0) = 0;
+
+  set_pid(child_context, new_pid);
+
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+  set_pc(child_context, get_pc(child_context) + INSTRUCTIONSIZE);
+
+  old_pid = new_pid;
+
+}
+
+void emit_pthread_join() {
+  create_symbol_table_entry(LIBRARY_TABLE, "pthread_join", 0, PROCEDURE, UINT64_T, 0, binary_length);
+
+   // load address of wstatus to a0 register
+  emit_ld(REG_A0, REG_SP, 0);
+
+  // remove wstatus pointer from the stack
+  emit_addi(REG_SP, REG_SP, WORDSIZE);
+
+  // load the correct syscall number and invoke syscall
+  emit_addi(REG_A7, REG_ZR, SYSCALL_PTHREADJOIN);
+
+  emit_ecall();
+
+  // jump back to caller
+  emit_jalr(REG_ZR, REG_RA, 0);
+
+}
+
+void implement_pthread_join(uint64_t* context) {
+
+  implement_wait(context);
+
+}
+
+void emit_pthread_exit() {
+  create_symbol_table_entry(LIBRARY_TABLE, "pthread_exit", 0, PROCEDURE, VOID_T, 0, binary_length);
+
+  // load exit code
+  emit_ld(REG_A0, REG_SP, 0);
+
+  // remove the exit code from the stack
+  emit_addi(REG_SP, REG_SP, WORDSIZE);
+
+  // load the correct syscall number and invoke syscall
+  emit_addi(REG_A7, REG_ZR, SYSCALL_PTHREADEXIT);
+
+  emit_ecall();
+
+  emit_jalr(REG_ZR, REG_RA, 0);
+
+}
+
+void implement_pthread_exit(uint64_t* context) {
+
+  implement_exit(context);
+  handle_context_scheduling(context);
+  set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
+
+}
+
+
 void emit_fork() {
   create_symbol_table_entry(LIBRARY_TABLE, "fork", 0, PROCEDURE, UINT64_T, 0, binary_length);
 
@@ -6755,7 +6870,7 @@ uint64_t implement_fork(uint64_t* context) {
 
   new_pid = old_pid + 1;
 
-  child_context = deepcopy_context(context);
+  child_context = deepcopy_context(context, FORK);
 
   *(get_regs(context) + REG_A0) = new_pid;
   *(get_regs(child_context) + REG_A0) = 0;
@@ -6842,11 +6957,16 @@ void implement_wait(uint64_t* context) {
 
         // get exit code of the zombie_child
         exit_code = get_exit_code(get_child_context(zombie_child));
-        // get least significant bits 0-8 of child's exit code
-        exit_code = sign_shrink(exit_code, 8);
-        // shift zombie_child's exit code to bits 8-15
-        exit_code = left_shift(exit_code, 8);
-        // get the wstatus pointer of the parent context
+
+        // shift exit-code for process created by fork, but not for process created by pthread_create
+        if (get_process_type(get_child_context(zombie_child)) == FORK) {
+          // get least significant bits 0-8 of child's exit code
+          exit_code = sign_shrink(exit_code, 8);
+          // shift zombie_child's exit code to bits 8-15
+          exit_code = left_shift(exit_code, 8);
+          // get the wstatus pointer of the parent context
+        }
+
         wstatus = *(get_regs(context) + REG_A0);
 
         // store the value of the shifted exit code in parent's wstatus pointer
@@ -7379,6 +7499,9 @@ void implement_brk(uint64_t* context) {
   // parameter
   uint64_t new_program_break;
 
+  // Mares Assignment7 Threads
+  uint64_t* current_thread;
+
   // local variable
   uint64_t previous_program_break;
 
@@ -7399,9 +7522,20 @@ void implement_brk(uint64_t* context) {
 
   if (new_program_break == *(get_regs(context) + REG_A0)) {
     // attempt to update program break succeeded
-    if (*(get_regs(context) + REG_A0) != previous_program_break)
+    if (*(get_regs(context) + REG_A0) != previous_program_break) {
       // account for brk syscall if program break actually changed
       sc_brk = sc_brk + 1;
+
+      // Update program break for all threads Assignment7 (Mares)
+      current_thread = thread_contexts;
+
+      while (current_thread != (uint64_t*) 0) {
+        try_brk(get_child_context(current_thread), new_program_break);
+        current_thread = get_next_child_ptr(current_thread);
+      }
+
+    }
+
   } else
     // attempt to update program break failed
     *(get_regs(context) + REG_A0) = previous_program_break;
@@ -7564,8 +7698,24 @@ void copy_page_table(uint64_t* parent_context, uint64_t* child_context, uint64_t
   }
 }
 
+void share_pages_pthread(uint64_t* parent_context, uint64_t* child_context, uint64_t low, uint64_t high) {
+  uint64_t frame;
+  uint64_t page;
+
+  page = low;
+
+  while (page < high) {
+
+    if (is_page_mapped(get_pt(parent_context), page)) {
+      frame = get_frame_for_page(get_pt(parent_context), page);
+      map_page(child_context, page, frame);
+    }
+    page = page + 1;
+  }
+}
+
 // Deep copy of parent context, returns the copied child context // (Mares)
-uint64_t* deepcopy_context(uint64_t* parent) {
+uint64_t* deepcopy_context(uint64_t* parent, uint64_t process_type) {
   uint64_t* child_context;
   uint64_t i;
   uint64_t high;
@@ -7589,8 +7739,20 @@ uint64_t* deepcopy_context(uint64_t* parent) {
     i = i + 1;
   }
 
+  // set process type (FORK or THREAD) for the new context
+  set_process_type(child_context, process_type);
+  set_process_type(parent, process_type);
+
+  // add thread to threadlist
+  if (get_process_type(child_context) == THREAD) {
+    if (thread_contexts == (uint64_t*) 0) {
+      add_thread_to_threadlist(parent);
+    }
+    add_thread_to_threadlist(child_context);
+  }
+
   // set children / parent dependencies
-  set_parent_fork(child_context, parent);
+  set_parent_process(child_context, parent);
   add_child_to_childlist(parent, child_context);
   set_process_status(child_context, READY);
 
@@ -7619,7 +7781,11 @@ uint64_t* deepcopy_context(uint64_t* parent) {
   // copy page table
   low = get_page_of_virtual_address(get_code_seg_start(child_context));
   high = get_page_of_virtual_address(get_program_break(child_context) - WORDSIZE) + 1;
-  copy_page_table(parent, child_context, low ,high);
+
+  if (get_process_type(child_context) == FORK)
+    copy_page_table(parent, child_context, low ,high);
+  else
+    share_pages_pthread(parent, child_context, low ,high);
   
   low = get_page_of_virtual_address(*(get_regs(parent) + REG_SP));
   high = NUMBEROFPAGES;
@@ -10472,7 +10638,7 @@ void print_child_list(uint64_t* list) {
 
 // Print method used for debugging context dependencies // (Mares)
 void print_contexts_of_context(uint64_t* context) {
-  printf2("\n My (%d) parent is: %d \n", (char*) context, (char*) get_parent_fork(context));
+  printf2("\n My (%d) parent is: %d \n", (char*) context, (char*) get_parent_process(context));
   print("My child list is:\n");
   print_child_list(get_children(context));
 }
@@ -10510,7 +10676,7 @@ void print_context_variables(uint64_t* context) {
   printf1("Used list: %d\n", (char*) get_used_list_head(context));
   printf1("Free list: %d\n", (char*) get_free_list_head(context));
   printf1("Children list: %d\n", (char*) get_children(context));
-  printf1("Fork Parent: %d\n", (char*) get_parent_fork(context));
+  printf1("Parent Process: %d\n", (char*) get_parent_process(context));
   printf1("Process Status: %d\n\n", (char*) get_process_status(context));
 }
 
@@ -10555,7 +10721,7 @@ void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context) {
   parent_list = get_children(parent_context);
   set_child_context(child_entry, child_context);
 
-  // if parent_children has no children yet
+  // if parent_childlist has no children yet
   if (get_children(parent_context) == (uint64_t*) 0) {
 
     set_next_child_ptr(child_entry, (uint64_t*) 0);
@@ -10569,6 +10735,30 @@ void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context) {
   }
 
   set_children(parent_context, child_entry);
+}
+
+
+// add thread context to global thread_list // (Mares)
+void add_thread_to_threadlist(uint64_t* new_thread) {
+  uint64_t* thread_entry;
+
+  thread_entry = allocate_child();
+  set_child_context(thread_entry, new_thread);
+
+  // if parent_children has no children yet
+  if (thread_contexts == (uint64_t*) 0) {
+
+    set_next_child_ptr(thread_entry, (uint64_t*) 0);
+    set_prev_child_ptr(thread_entry, (uint64_t*) 0);
+
+  }
+  // if new_thread has siblings
+  else {
+    set_prev_child_ptr(thread_contexts, thread_entry);
+    set_next_child_ptr(thread_entry, thread_contexts);
+  }
+
+  thread_contexts = thread_entry;
 }
 
 // delete child_to_delete from childlist of parent // (Mares)
@@ -10611,7 +10801,7 @@ void adopt_children(uint64_t* context) {
     child_context = get_child_context(child);
     
     if (get_process_status(child_context) != ZOMBIE) {
-      set_parent_fork(child_context, INIT_PROCESS);
+      set_parent_process(child_context, INIT_PROCESS);
       add_child_to_childlist(INIT_PROCESS, child_context);
     }
     child = get_next_child_ptr(child);
@@ -11130,6 +11320,12 @@ uint64_t handle_system_call(uint64_t* context) {
     implement_fork(context);
   else if (a7 == SYSCALL_WAIT)
     implement_wait(context);
+  else if (a7 == SYSCALL_PTHREADCREATE)
+    implement_pthread_create(context);
+  else if (a7 == SYSCALL_PTHREADJOIN)
+    implement_pthread_join(context);
+  else if (a7 == SYSCALL_PTHREADEXIT)
+    implement_pthread_exit(context);
   else if (a7 == SYSCALL_LOCK)
     implement_lock(context);
   else if (a7 == SYSCALL_UNLOCK)
@@ -11151,7 +11347,7 @@ uint64_t handle_system_call(uint64_t* context) {
   return DONOTEXIT;
 }
 
-// scheduler for fork / wait (Mares)
+// scheduler for fork / wait and pthread_exit (Mares)
 uint64_t handle_context_scheduling(uint64_t* context) {
   uint64_t exit_code;
   uint64_t wstatus;
@@ -11171,10 +11367,10 @@ uint64_t handle_context_scheduling(uint64_t* context) {
     adopt_children(context);
 
   // if from_context has a parent
-  if (get_parent_fork(context) != (uint64_t*) 0) {
+  if (get_parent_process(context) != (uint64_t*) 0) {
 
     // and parent has not called wait() yet, make from_context a zombie
-    if (get_process_status(get_parent_fork(context)) != BLOCKED) {
+    if (get_process_status(get_parent_process(context)) != BLOCKED) {
       set_process_status(context, ZOMBIE);
 
       used_contexts = delete_context_from_list(context, used_contexts);
@@ -11183,23 +11379,28 @@ uint64_t handle_context_scheduling(uint64_t* context) {
     } 
     // if parent is blocked, add it to ready-list and delete if from blocked-list
     else {
-      set_process_status(get_parent_fork(context), READY);
+      set_process_status(get_parent_process(context), READY);
       used_contexts = delete_context(context, used_contexts);
-      blocked_contexts = delete_context_from_list(get_parent_fork(context), blocked_contexts);
-      used_contexts = add_context_to_list(get_parent_fork(context), used_contexts);
+      blocked_contexts = delete_context_from_list(get_parent_process(context), blocked_contexts);
+      used_contexts = add_context_to_list(get_parent_process(context), used_contexts);
 
-      if (*(get_regs(get_parent_fork(context)) + REG_A0) != 0) {
-        // get least significant bits 0-8 of child's exit code
-        exit_code = sign_shrink(exit_code, 8);
-        // shift child's exit code to bits 8-15
-        exit_code = left_shift(exit_code, 8);
+      if (*(get_regs(get_parent_process(context)) + REG_A0) != 0) {
+        
+        // shift exit-code for process created by fork, but not for process created by pthread_create
+        if (get_process_type(context) == FORK) {
+          // get least significant bits 0-8 of child's exit code
+          exit_code = sign_shrink(exit_code, 8);
+          // shift child's exit code to bits 8-15
+          exit_code = left_shift(exit_code, 8);
+        }
+        
         // get the wstatus pointer of the parent
-        wstatus = *(get_regs(get_parent_fork(context)) + REG_A0);
+        wstatus = *(get_regs(get_parent_process(context)) + REG_A0);
         // store the value of the shifted exit code in parent's wstatus pointer
-        map_and_store(get_parent_fork(context), wstatus, exit_code); 
+        map_and_store(get_parent_process(context), wstatus, exit_code); 
       }
 
-      *(get_regs(get_parent_fork(context)) + REG_A0) = get_pid(context);
+      *(get_regs(get_parent_process(context)) + REG_A0) = get_pid(context);
       
     }
 
@@ -11375,6 +11576,9 @@ uint64_t mipster(uint64_t* to_context) {
   while (1) {
     from_context = mipster_switch(to_context, timeout);
     next_context = get_next_context(from_context);
+
+    // if (used_contexts != (uint64_t*)0)
+    // print_list(zombie_contexts);
 
     if (get_parent(from_context) != MY_CONTEXT) {
       to_context = get_parent(from_context);
