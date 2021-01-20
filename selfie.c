@@ -1788,13 +1788,15 @@ void      free_context(uint64_t* context);
 uint64_t* delete_context(uint64_t* context, uint64_t* from);
 
 // delete & add without updating free_context list
-uint64_t* delete_context_from_list(uint64_t* context, uint64_t* list);             // (Mares)
-uint64_t* add_context_to_list(uint64_t* context, uint64_t* list);                  // (Mares)
+uint64_t* delete_context_from_list(uint64_t* context, uint64_t* list);            // (Mares)
+uint64_t* add_context_to_list(uint64_t* context, uint64_t* list);                 // (Mares)
 
 void add_child_to_childlist(uint64_t* parent_context, uint64_t* child_context);   // (Mares)
 void adopt_children(uint64_t* context);                                           // (Mares)
 void delete_child_from_childlist(uint64_t* child, uint64_t* parent);              // (Mares)
-void add_thread_to_threadlist(uint64_t* context);
+void add_thread_to_threadlist(uint64_t* context);                                 // (Mares)
+uint64_t* delete_thread_from_threadlist(uint64_t* context);                       // (Mares)
+
 
 // print methods used for debugging
 void print_context_variables(uint64_t* context);    // (Mares)
@@ -2016,7 +2018,7 @@ void reset_microkernel() {
     zombie_contexts = delete_context(zombie_contexts, zombie_contexts);
 
   while (thread_contexts != (uint64_t*) 0)
-    thread_contexts = delete_context(thread_contexts, thread_contexts);
+    thread_contexts = delete_thread_from_threadlist(get_child_context(thread_contexts));
 }
 
 // -----------------------------------------------------------------
@@ -6849,6 +6851,9 @@ void implement_pthread_exit(uint64_t* context) {
 
   implement_exit(context);
   handle_context_scheduling(context);
+
+  delete_thread_from_threadlist(context);
+
   set_pc(context, get_pc(context) + INSTRUCTIONSIZE);
 
 }
@@ -10790,6 +10795,36 @@ void delete_child_from_childlist(uint64_t* child_to_delete, uint64_t* parent) {
   }
 }
 
+// delete thread from threadlist // (Mares)
+uint64_t* delete_thread_from_threadlist(uint64_t* thread_to_delete) {
+  uint64_t* thread;
+
+  thread = thread_contexts;
+
+  // if thread is first in the list
+  if (thread_to_delete == get_child_context(thread))
+    thread_contexts = get_next_child_ptr(thread);
+
+  else {
+    // if thread is not first in the list, search for it
+    while (thread != (uint64_t*) 0) {
+      // if thread was found in list
+      if (get_child_context(thread) == thread_to_delete) {
+        // if found child has a precessor
+        if (get_prev_child_ptr(thread) != (uint64_t*) 0)
+          set_next_child_ptr(get_prev_child_ptr(thread), get_next_child_ptr(thread));
+        // if found child has a successor
+        if (get_next_child_ptr(thread) != (uint64_t*) 0)
+          set_prev_child_ptr(get_next_child_ptr(thread), get_prev_child_ptr(thread));
+
+        thread = (uint64_t*) 0;
+      } else
+        thread = get_next_child_ptr(thread);
+    }
+  }
+  return thread_contexts;
+}
+
 // adds all non-zombie children of context to childlist of INIT_PROCESS // (Mares)
 void adopt_children(uint64_t* context) {
   uint64_t* child;
@@ -11587,11 +11622,13 @@ uint64_t mipster(uint64_t* to_context) {
     next_context = get_next_context(from_context);
 
     if (get_parent(from_context) != MY_CONTEXT) {
+
       to_context = get_parent(from_context);
 
       timeout = TIMEROFF;
-    } else if (handle_exception(from_context) == EXIT)
+    } else if (handle_exception(from_context) == EXIT) {
       return get_exit_code(from_context);
+    }
     else {
       to_context = schedule_next_context(next_context);
 
