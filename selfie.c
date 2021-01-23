@@ -2045,6 +2045,7 @@ uint64_t handle_division_by_zero(uint64_t* context);
 uint64_t handle_timer(uint64_t* context);
 uint64_t handle_exception(uint64_t* context);
 uint64_t handle_context_scheduling(uint64_t* context); // (Mares)
+void delete_all_threads(uint64_t* context);            // (Mares)
 
 uint64_t mipster(uint64_t* to_context);
 uint64_t hypster(uint64_t* to_context);
@@ -6849,7 +6850,23 @@ void emit_pthread_exit() {
 
 void implement_pthread_exit(uint64_t* context) {
 
-  implement_exit(context);
+  uint64_t signed_int_exit_code;
+
+  if (debug_syscalls) {
+    print("(exit): ");
+    print_register_hexadecimal(REG_A0);
+    print(" |- ->\n");
+  }
+
+  signed_int_exit_code = *(get_regs(context) + REG_A0);
+
+  set_exit_code(context, sign_shrink(signed_int_exit_code, SYSCALL_BITWIDTH));
+
+  printf1("%s: <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n", selfie_name);
+  printf3("%s: %s exiting pthread with exit code %d\n", selfie_name,
+    get_name(context),
+    (char*) sign_extend(get_exit_code(context), SYSCALL_BITWIDTH));
+
   handle_context_scheduling(context);
 
   delete_thread_from_threadlist(context);
@@ -7026,6 +7043,7 @@ void implement_exit(uint64_t* context) {
   printf3("%s: %s exiting with exit code %d\n", selfie_name,
     get_name(context),
     (char*) sign_extend(get_exit_code(context), SYSCALL_BITWIDTH));
+
 }
 
 void emit_read() {
@@ -7535,7 +7553,7 @@ void implement_brk(uint64_t* context) {
       current_thread = thread_contexts;
 
       while (current_thread != (uint64_t*) 0) {
-        try_brk(get_child_context(current_thread), new_program_break);
+        set_program_break(get_child_context(current_thread), new_program_break);
         current_thread = get_next_child_ptr(current_thread);
       }
 
@@ -10802,8 +10820,10 @@ uint64_t* delete_thread_from_threadlist(uint64_t* thread_to_delete) {
   thread = thread_contexts;
 
   // if thread is first in the list
-  if (thread_to_delete == get_child_context(thread))
+  if (thread_to_delete == get_child_context(thread)) {
     thread_contexts = get_next_child_ptr(thread);
+    set_next_child_ptr(thread, (uint64_t*) 0);
+  }
 
   else {
     // if thread is not first in the list, search for it
@@ -11368,9 +11388,14 @@ uint64_t handle_system_call(uint64_t* context) {
   else if (a7 == SYSCALL_EXIT) {
     implement_exit(context);
 
-    // TODO: exit only if all contexts have exited
+    // if a thread calls exit, delete all threads and exit
+    if (get_process_type(context) == THREAD) {
+      delete_all_threads(context);
+      return EXIT;
+    }
+
     return handle_context_scheduling(context);
-    // return EXIT;
+
   } else {
     printf2("%s: unknown system call %u\n", selfie_name, (char*) a7);
 
@@ -11380,6 +11405,22 @@ uint64_t handle_system_call(uint64_t* context) {
   }
 
   return DONOTEXIT;
+}
+
+void delete_all_threads(uint64_t* context) {
+  uint64_t* temp;
+
+  while (thread_contexts != (uint64_t*) 0)
+    thread_contexts = delete_thread_from_threadlist(get_child_context(thread_contexts));
+
+  temp = used_contexts;
+  while (temp != (uint64_t*) 0) {
+    if (get_process_type(temp) == THREAD) {
+      if (temp != context)
+        used_contexts = delete_context_from_list(temp, used_contexts);
+    }
+    temp = get_next_context(temp);
+  }
 }
 
 // scheduler for fork / wait and pthread_exit (Mares)
